@@ -91,6 +91,7 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   TrafficGpio_Init();
+  TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   /* registracia pred spustenim automatu */
   TrafficFsm_Init(HAL_GetTick());
   /* USER CODE END 2 */
 
@@ -101,8 +102,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* stavovy automat vyhodnoti casovanie, GPIO zobrazi aktualnu fazu */
-    TrafficGpio_Apply(TrafficFsm_Update(HAL_GetTick()));
+    /* stavovy automat vyhodnoti casovanie, zmenu fazy oznami GPIO cez callback */
+    TrafficFsm_Update(HAL_GetTick());
   }
   /* USER CODE END 3 */
 }

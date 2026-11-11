@@ -262,8 +262,56 @@ static void test_f3_mode_switch(void)
     expect_phase(TRAFFIC_PHASE_A_GREEN);
 }
 
+/* Simulovany ovladac GPIO - callback registrovany v automate */
+static TrafficPhase gpio_phase = TRAFFIC_PHASE_COUNT;
+static unsigned gpio_calls = 0;
+
+static void fake_gpio_apply(TrafficPhase p)
+{
+    gpio_phase = p;
+    gpio_calls++;
+}
+
+static void test_callback(void)
+{
+    printf("\nCallback pre zmenu fazy (oddelenie automatu od GPIO)\n");
+
+    /* bez registracie (NULL) automat funguje a nic nevola */
+    TrafficFsm_RegisterPhaseCallback(0);
+    now = 0;
+    TrafficFsm_Init(now);
+    run_until(2000, 1, 0);
+    CHECK(gpio_calls == 0, "callback volany bez registracie");
+
+    /* registracia pred Init: pociatocna spolocna cervena sa oznami hned */
+    TrafficFsm_RegisterPhaseCallback(fake_gpio_apply);
+    now = 0;
+    TrafficFsm_Init(now);
+    CHECK(gpio_calls == 1 && gpio_phase == TRAFFIC_PHASE_ALL_RED, "Init neoznamil spolocnu cervenu");
+
+    /* pocas jedneho cyklu Demo: kazda zmena fazy = jedno volanie, GPIO ma vzdy aktualnu fazu */
+    unsigned changes = 0;
+    TrafficPhase last = TrafficFsm_GetPhase();
+    while (now < 31000)
+    {
+        now++;
+        TrafficPhase p = TrafficFsm_Update(now);
+        if (p != last) { changes++; last = p; }
+        CHECK(gpio_phase == p, "GPIO zobrazuje %s, automat je vo faze %s", phase_name(gpio_phase), phase_name(p));
+    }
+    printf("  zmien fazy: %u, volani callbacku: %u (vratane Init)\n", changes, gpio_calls);
+    CHECK(gpio_calls == changes + 1U, "pocet volani callbacku %u, ocakavany %u", gpio_calls, changes + 1U);
+
+    /* zmena fazy vyvolana prikazom sa oznami tiez */
+    TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now);
+    CHECK(gpio_phase == TrafficFsm_GetPhase(), "zmena fazy po MODE CONTROL nebola oznamena");
+
+    TrafficFsm_RegisterPhaseCallback(0);
+}
+
 int main(void)
 {
+    test_callback();
     test_f1_demo_timing();
     test_f2_conflicts();
     test_f3_mode_switch();

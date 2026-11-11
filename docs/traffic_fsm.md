@@ -2,14 +2,19 @@
 
 Autor: Branislav Krajčovič · vetva `feature/traffic-fsm` · súbory `Core/Inc/traffic_fsm.h`, `Core/Src/traffic_fsm.c`
 
-Automat rozhoduje o režime, fáze svetiel a výsledku požiadaviek z terminálu. Nepoužíva HAL ani blokujúce čakanie. Aktuálny čas v milisekundách (`HAL_GetTick()`) dostáva ako parameter, preto sa dá otestovať aj na PC so simulovaným časom. Výstupom je jedna fáza typu `TrafficPhase`, ktorú hlavná slučka pošle ovládaču GPIO.
+Automat rozhoduje o režime, fáze svetiel a výsledku požiadaviek z terminálu. Nepoužíva HAL ani blokujúce čakanie. Aktuálny čas v milisekundách (`HAL_GetTick()`) dostáva ako parameter, preto sa dá otestovať aj na PC so simulovaným časom. Výstupom je jedna fáza typu `TrafficPhase`.
+
+Podľa prednášky *Prerušenia – abstrakcia od HW* je aplikačná logika oddelená od hardvérovej vrstvy. Automat nevolá ovládač GPIO priamo. Zmenu fázy oznamuje cez **zaregistrovanú callback funkciu**, v projekte `TrafficGpio_Apply`. Ovládač GPIO sa dá vymeniť alebo nahradiť simulovaným bez zmeny automatu, čo využívajú testy na PC. Callback sa registruje pred spustením automatu a pred jeho volaním sa kontroluje, či nie je `NULL`.
+
+Všetky funkcie automatu sa volajú z hlavnej slučky, nie z obsluhy prerušenia (modul USART v prerušení len prijíma znaky a celé riadky spracúva v slučke). Stav automatu preto nie je zdieľaný s prerušením a nepotrebuje kvalifikátor `volatile`.
 
 ## Rozhranie
 
 | Funkcia | Použitie |
 | --- | --- |
+| `TrafficFsm_RegisterPhaseCallback(callback)` | Registrácia funkcie volanej pri každej zmene fázy (napr. `TrafficGpio_Apply`). Volať pred `TrafficFsm_Init`. |
 | `TrafficFsm_Init(now)` | Po inicializácii spoločná červená, režim Demo začne zelenou pre A po 1 s. |
-| `TrafficFsm_Update(now)` | Volá sa v každom prechode hlavnej slučky. Vyhodnotí časovanie a vráti aktuálnu fázu. |
+| `TrafficFsm_Update(now)` | Volá sa v každom prechode hlavnej slučky. Vyhodnotí časovanie, pri zmene fázy zavolá callback a vráti aktuálnu fázu. |
 | `TrafficFsm_RequestMode(mode, now)` | Príkaz `MODE DEMO` / `MODE CONTROL`. |
 | `TrafficFsm_RequestColor(light, color, now)` | Príkaz `SET <semafor> <farba>`. |
 | `TrafficFsm_GetStatus(now, &status)` | Údaje pre `STATUS`: aktívny režim, cieľový režim (`NEXT`), `READY`, fáza. |
@@ -30,10 +35,11 @@ Použitie v hlavnej slučke:
 
 ```c
 TrafficGpio_Init();
-TrafficFsm_Init(HAL_GetTick());
+TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   /* pred spustením automatu */
+TrafficFsm_Init(HAL_GetTick());                        /* oznámi spoločnú červenú */
 while (1)
 {
-    TrafficGpio_Apply(TrafficFsm_Update(HAL_GetTick()));
+    TrafficFsm_Update(HAL_GetTick());                  /* zmenu fázy oznámi callback */
     /* modul USART: príkazy -> TrafficFsm_RequestMode / TrafficFsm_RequestColor */
 }
 ```
@@ -129,10 +135,11 @@ Každý krok simulácie navyše kontroluje bezpečnostné pravidlo, že najviac 
 
 | Skúška | Overené | Výsledok |
 | --- | --- | --- |
+| **Callback** | Bez registrácie (`NULL`) automat beží a nič nevolá. Po registrácii Init oznámi spoločnú červenú, každá zmena fázy (časová aj vyvolaná príkazom) zavolá callback práve raz a simulovaný ovládač GPIO zobrazuje vždy aktuálnu fázu. | prešla |
 | **F1 – Časovanie Demo** | 1 s štartovacej červenej, dva celé cykly A → B → C → P, presné časy všetkých zmien podľa tabuľky (žiadna fáza nezačne skôr). Pri volaní `Update` s oneskorením (krok 7 ms) trvá žltá celé 2 s a spoločná červená celú 1 s. | prešla |
 | **F2 – Kolízie** | Pri zelenej A: `SET B GREEN` aj `SET P GREEN` → `ERR CONFLICT`. Pri zelenej P: `SET C GREEN` → `ERR CONFLICT`. Zamietnutie počas žltej aj počas spoločnej červenej, prijatie po uplynutí intervalu. `SET P YELLOW` a žltá pre červený semafor → `ERR STATE`, `SET` v Demo → `ERR MODE`. | prešla |
 | **F3 – Prepnutie režimu** | `MODE CONTROL` počas zelenej A: celá žltá 2 s a spoločná červená 1 s, potom Control čaká (`READY=1`). Počas prepínania `SET P GREEN` a návrat do Demo → `ERR BUSY`, opakovaný cieľ → `OK`. `MODE DEMO` počas zelenej P: spoločná červená 1 s, Demo začne fázou A. Prepnutie po uplynutí spoločnej červenej prebehne ihneď. Pretečenie času `uint32_t`. | prešla |
 
-Výsledok: **98 811 kontrol, 0 chýb**.
+Výsledok: **131 815 kontrol, 0 chýb**.
 
 Na hotovom modeli sa skúšky zopakujú s ovládačom GPIO a modulom USART (časovanie F1 stopkami, F2 a F3 príkazmi z terminálu).

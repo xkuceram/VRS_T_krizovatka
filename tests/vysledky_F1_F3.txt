@@ -1,4 +1,7 @@
 
+Callback pre zmenu fazy (oddelenie automatu od GPIO)
+  zmien fazy: 12, volani callbacku: 13 (vratane Init)
+
 F1 - casovanie Demo (2 cykly, krok 1 ms)
   t= 1000 ms  -> A_GREEN
   t= 6000 ms  -> A_YELLOW
@@ -84,4 +87,4 @@ F3b - prepnutie po uplynuti spolocnej cervenej prebehne ihned
 F3c - pretecenie milisekundoveho casu (uint32_t)
   t=    0 ms  -> A_GREEN
 
-98811 kontrol, 0 chyb -> VSETKY TESTY PRESLI
+131815 kontrol, 0 chyb -> VSETKY TESTY PRESLI

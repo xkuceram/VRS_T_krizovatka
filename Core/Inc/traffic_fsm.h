@@ -9,13 +9,20 @@
  * so simulovanym casom. Vystupom je jedna faza typu TrafficPhase, ktoru
  * hlavna slucka posle ovladacu GPIO (TrafficGpio_Apply).
  *
+ * Automat nevola ovladac GPIO priamo (oddelenie aplikacnej vrstvy od HW).
+ * Zmenu fazy oznamuje cez zaregistrovanu callback funkciu.
+ *
  * Pouzitie v hlavnej slucke:
+ *   TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   // pred inicializaciou
  *   TrafficFsm_Init(HAL_GetTick());
  *   while (1)
  *   {
- *       TrafficGpio_Apply(TrafficFsm_Update(HAL_GetTick()));
+ *       TrafficFsm_Update(HAL_GetTick());
  *       ... spracovanie prikazov z USART -> TrafficFsm_RequestMode / TrafficFsm_RequestColor
  *   }
+ *
+ * Vsetky funkcie automatu sa volaju z hlavnej slucky (nie z obsluhy prerusenia),
+ * preto stav automatu nie je zdielany s prerusenim a nepotrebuje "volatile".
  */
 
 #include <stdint.h>
@@ -71,6 +78,15 @@ typedef struct
     uint8_t ready;                      /* 1 = Control caka pri spolocnej cervenej po uplynuti ochranneho intervalu */
     TrafficPhase phase;                 /* aktualna faza automatu */
 } TrafficFsmStatus;
+
+/* Typ callback funkcie volanej pri zmene fazy (napr. TrafficGpio_Apply) */
+typedef void (*TrafficPhaseCallback)(TrafficPhase phase);
+
+/*
+ * Registracia callback funkcie pre zmenu fazy. Registrovat pred TrafficFsm_Init,
+ * aby sa uz pociatocna spolocna cervena zobrazila. NULL = bez callbacku.
+ */
+void TrafficFsm_RegisterPhaseCallback(TrafficPhaseCallback callback);
 
 /* Inicializacia - spolocna cervena, po 1 s zacne rezim Demo zelenou pre A */
 void TrafficFsm_Init(uint32_t now_ms);

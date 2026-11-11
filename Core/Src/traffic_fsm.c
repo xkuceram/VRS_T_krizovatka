@@ -46,15 +46,34 @@ static TrafficPhase phase = TRAFFIC_PHASE_ALL_RED;
 static uint32_t phase_start_ms = 0;
 static uint32_t demo_step = DEMO_LAST_STEP;
 
+/* Callback pre zmenu fazy (aplikacna vrstva -> ovladac GPIO) */
+static TrafficPhaseCallback phase_callback = 0;
+
 
 /* ---------------------------------------------------------------------------- */
 /* Pomocne funkcie                                                              */
 /* ---------------------------------------------------------------------------- */
 
+/* Oznamenie fazy registrovanej funkcii - kontrola, ci je callback zaregistrovany */
+static void notify_phase(void)
+{
+    if (phase_callback != 0)
+    {
+        phase_callback(phase);
+    }
+}
+
 static void enter_phase(TrafficPhase new_phase, uint32_t now_ms)
 {
+    uint8_t changed = (uint8_t)(new_phase != phase);
+
     phase = new_phase;
     phase_start_ms = now_ms;
+
+    if (changed)
+    {
+        notify_phase();
+    }
 }
 
 static uint32_t phase_elapsed(uint32_t now_ms)
@@ -139,13 +158,20 @@ static void start_phase_termination(uint32_t now_ms)
 /* Verejne funkcie                                                              */
 /* ---------------------------------------------------------------------------- */
 
+void TrafficFsm_RegisterPhaseCallback(TrafficPhaseCallback callback)
+{
+    phase_callback = callback;
+}
+
 void TrafficFsm_Init(uint32_t now_ms)
 {
     /* po inicializacii spolocna cervena, Demo zacne prvou zelenou az po 1 s */
     active_mode = TRAFFIC_MODE_DEMO;
     next_mode = TRAFFIC_MODE_NONE;
     demo_step = DEMO_LAST_STEP;
-    enter_phase(TRAFFIC_PHASE_ALL_RED, now_ms);
+    phase = TRAFFIC_PHASE_ALL_RED;
+    phase_start_ms = now_ms;
+    notify_phase();                     /* pociatocny stav sa oznami vzdy */
 }
 
 TrafficPhase TrafficFsm_Update(uint32_t now_ms)
