@@ -139,10 +139,13 @@ Každý pin vyhradený pre LED nastavíme ako výstup typu push-pull. Pripojí s
 
 V tabuľke je uvedené označenie pinu STM32, potlač na doske a pozícia na konektore. [STMicroelectronics UM1956, tabuľka 12](https://www.st.com/resource/en/user_manual/dm00231744-stm32-nucleo-32-boards-mb1180-stmicroelectronics.pdf)
 
+<<<<<<< HEAD
 ![Zapojenie 11 LED a rezistorov 330 Ω na breadboarde s doskou NUCLEO-F303K8](docs/images/zapojenie-breadboard.png)
 
 *Obr. 2 – Zapojenie semaforov na breadboarde. Výkres z Cirkit Designeru.*
 
+=======
+>>>>>>> 50443d77f75a12ec3dc62362cf1ba082f06eb4c4
 ## Rozdelenie práce
 
 Každý člen navrhne, naprogramuje a overí vlastný modul. K modulu odovzdá zdrojové súbory a výsledky troch uvedených skúšok. Pri obhajobe svoju časť predvedie na spoločnom modeli.
