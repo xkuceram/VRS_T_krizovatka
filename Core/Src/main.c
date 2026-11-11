@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "traffic_gpio.h"
+#include "traffic_fsm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -90,6 +91,7 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   TrafficGpio_Init();
+  TrafficFsm_Init(HAL_GetTick());
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -99,6 +101,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* stavovy automat vyhodnoti casovanie, GPIO zobrazi aktualnu fazu */
+    TrafficGpio_Apply(TrafficFsm_Update(HAL_GetTick()));
   }
   /* USER CODE END 3 */
 }
