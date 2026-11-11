@@ -1,10 +1,27 @@
 # Model T-križovatky so svetelnou signalizáciou
 
-Tímový projekt z predmetu VRS na Fakulte elektrotechniky a informatiky Slovenskej technickej univerzity v Bratislave.
+Tímový projekt z predmetu VRS
 
-## Popis projektu
+## Cieľ a povinný výsledok
 
-Zostavíme fyzický model T-križovatky s jedným priechodom pre chodcov. Doska STM32 NUCLEO-F303K8 bude ovládať tri cestné semafory a jeden semafor pre chodcov. V režime **Demo** sa svetlá prepínajú automaticky podľa pevnej sekvencie. V režime **Control** môže používateľ z počítača meniť farby jednotlivých semaforov príkazmi cez USART. Z terminálu sa dá v oboch režimoch zistiť stav modelu a prepnúť režim.
+Zostavíme model T-križovatky s tromi cestnými semaformi a jedným priechodom pre chodcov. Doska STM32 NUCLEO-F303K8 bude riadiť oba režimy podľa rovnakých pravidiel. Zelenú môže dostať naraz najviac jeden semafor.
+
+Na obhajobe predvedieme funkčný model, celý cyklus **Demo** a ručné ovládanie v režime **Control** cez sériový terminál. Na výstupoch overíme dĺžku žltej a spoločnej červenej. Pri zelenej pre vozidlá odošleme požiadavku na zelenú pre chodcov a overíme odpoveď `ERR CONFLICT` aj stav svetiel.
+
+## Obsah
+
+- [Rozsah projektu](#rozsah-projektu)
+- [Prehľad systému](#prehľad-systému)
+- [Komunikačný protokol](#komunikačný-protokol)
+- [Potrebný hardvér](#potrebný-hardvér)
+- [Rozdelenie práce](#rozdelenie-práce)
+- [Overenie funkčnosti](#overenie-funkčnosti)
+- [Vzdelávacie ciele](#vzdelávacie-ciele)
+- [Postup práce v repozitári](#postup-práce-v-repozitári)
+
+## Rozsah projektu
+
+Projekt zahŕňa zapojenie modelu, ovládač GPIO, stavový automat a komunikáciu cez USART2. V režime **Demo** beží pevná sekvencia fáz. V režime **Control** používateľ žiada zmenu svetiel z terminálu. Výpis stavu a prepínanie režimov sú dostupné v oboch režimoch.
 
 | Označenie | Umiestnenie na modeli | Svetlá |
 | --- | --- | --- |
@@ -13,16 +30,20 @@ Zostavíme fyzický model T-križovatky s jedným priechodom pre chodcov. Doska 
 | C | Vjazd z dolnej vetvy križovatky | Červená, žltá, zelená |
 | P | Priechod naprieč dolnou vetvou | Červená, zelená |
 
+![Pohľad zhora na T-križovatku s vjazdmi A, B a C a priechodom P](docs/images/t-krizovatka.svg)
+
+*Obr. 1 – Rozmiestnenie semaforov a smer príjazdu do križovatky.*
+
 Cestný semafor riadi všetky jazdné smery zo svojho vjazdu. Pre model budeme považovať všetky dvojice vjazdov za kolízne. Priechod P bude mať samostatnú fázu, pri ktorej budú všetky cestné semafory na červenej.
 
-## Pravidlá signalizácie
+### Pravidlá signalizácie
 
 - Po inicializácii sa rozsvietia štyri červené svetlá. Režim Demo začne prvou zelenou až po jednej sekunde spoločnej červenej.
 - V každom ustálenom stave svieti na každom semafore práve jedna farba. Ak má niektorý cestný semafor zelenú alebo žltú, ostatné semafory svietia načerveno. Pri zelenej pre chodcov svietia všetky tri cestné semafory načerveno.
 - Cestná zelená sa ukončuje dvojsekundovou žltou. Po žltej alebo po skončení zelenej pre chodcov nasleduje najmenej jedna sekunda spoločnej červenej. Až potom je možné zapnúť zelenú.
 - Rovnaké pravidlá vyhodnocuje jeden stavový automat pre Demo, Control aj prechod medzi režimami. Pri odmietnutí príkazu pokračuje už naplánované časovanie aktuálnej fázy.
 
-## Režim Demo
+### Režim Demo
 
 Po štartovacej sekunde spoločnej červenej prebieha nasledujúci cyklus s menovitou dĺžkou 30 s. Za poslednou fázou nasleduje opäť krok 1.
 
@@ -42,11 +63,27 @@ Po štartovacej sekunde spoločnej červenej prebieha nasledujúci cyklus s meno
 
 Automat bude vyhodnocovať uplynutý čas od vstupu do fázy podľa milisekundového systémového času. Hlavná slučka bude medzi zmenami svetiel priebežne spracúvať komunikáciu. Žltá a spoločná červená dostanú celý interval aj vtedy, keď sa predchádzajúca fáza skončí s oneskorením.
 
-## Režim Control a zmena režimu
+### Režim Control a zmena režimu
 
 V ručnom režime automat po skončení spoločnej červenej čaká na príkaz. Používateľ môže vybrať zelenú na ktoromkoľvek zo štyroch semaforov. Zelená zostane svietiť do prijatia platného príkazu na ukončenie fázy alebo zmenu režimu. Cestná žltá a interval spoločnej červenej dobehnú automaticky.
 
 Pri požiadavke na zmenu režimu sa cestná zelená ukončí cez žltú, prebiehajúca žltá dobehne a zelená pre chodcov prejde na červenú. Automat dokončí interval spoločnej červenej a potom aktivuje cieľový režim. Ak už tento interval uplynul, režim sa prepne ihneď. Po prechode do Demo cyklus začne zelenou pre A. Po prechode do Control zostanú všetky semafory na červenej a automat bude čakať na príkaz.
+
+## Prehľad systému
+
+```mermaid
+flowchart TD
+    PC["Sériový terminál na PC"] <-->|"USART2 cez ST-LINK"| USART["Modul USART"]
+    USART <-->|"Požiadavka a výsledok"| FSM["Stavový automat"]
+    TICK["Systémový čas v ms"] --> FSM
+    FSM -->|"TrafficPhase"| GPIO["Ovládač GPIO"]
+    GPIO -->|"Aplikovaná fáza pre STATUS"| USART
+    GPIO -->|"11 výstupov"| LED["Semafory A, B, C a P"]
+```
+
+- **Stavový automat** dostáva aktuálny čas a požiadavky z USART. Určuje režim, fázu a výsledok požiadavky. Výstupom je jedna fáza zo spoločného typu `TrafficPhase` (spoločná červená, zelená alebo žltá jedného cestného semafora, zelená pre chodcov).
+- **Ovládač GPIO** prevádza celú fázu na kombináciu 11 výstupov. Pri zmene najprv vypne končiacu zelenú alebo žltú, nastaví červené svetlá a potom zapne novú žltú alebo zelenú podľa fázy. Po inicializácii nastaví spoločnú červenú.
+- **Modul USART** prijíma bajty cez prerušenie a spracúva celé riadky v hlavnej slučke. Z príkazov vytvorí požiadavky pre automat a z jeho výsledku zostaví odpoveď. Pri `STATUS` vypíše farby poslednej fázy aplikovanej na GPIO. Príjem aj odosielanie budú prebiehať bez čakania v hlavnej slučke.
 
 ## Komunikačný protokol
 
@@ -102,11 +139,9 @@ Každý pin vyhradený pre LED nastavíme ako výstup typu push-pull. Pripojí s
 
 V tabuľke je uvedené označenie pinu STM32, potlač na doske a pozícia na konektore. [STMicroelectronics UM1956, tabuľka 12](https://www.st.com/resource/en/user_manual/dm00231744-stm32-nucleo-32-boards-mb1180-stmicroelectronics.pdf)
 
-## Rozhranie medzi časťami programu
+![Zapojenie 11 LED a rezistorov 330 Ω na breadboarde s doskou NUCLEO-F303K8](docs/images/zapojenie-breadboard.png)
 
-- **Stavový automat** dostáva aktuálny čas a požiadavky z USART. Určuje režim, fázu a výsledok požiadavky. Výstupom je jedna fáza zo spoločného typu `TrafficPhase` (spoločná červená, zelená alebo žltá jedného cestného semafora, zelená pre chodcov).
-- **Ovládač GPIO** prevádza celú fázu na kombináciu 11 výstupov. Pri zmene najprv vypne končiacu zelenú alebo žltú, nastaví červené svetlá a potom zapne novú žltú alebo zelenú podľa fázy. Po inicializácii nastaví spoločnú červenú.
-- **Modul USART** prijíma bajty cez prerušenie a spracúva celé riadky v hlavnej slučke. Z príkazov vytvorí požiadavky pre automat a z jeho výsledku zostaví odpoveď. Pri `STATUS` vypíše farby poslednej fázy aplikovanej na GPIO. Príjem aj odosielanie budú prebiehať bez čakania v hlavnej slučke.
+*Obr. 2 – Zapojenie semaforov na breadboarde. Výkres z Cirkit Designeru.*
 
 ## Rozdelenie práce
 
@@ -132,9 +167,24 @@ Každý člen navrhne, naprogramuje a overí vlastný modul. K modulu odovzdá z
 | **U2 – Chybný vstup a obnova príjmu** | V Control poslať `SET X GREEN`, `SET P YELLOW` a riadok s 33 znakmi. Zariadenie postupne vráti `ERR SYNTAX`, `ERR STATE`, `ERR LENGTH` a potom spracuje platný `STATUS`. |
 | **U3 – Komunikácia počas cyklu** | Počas Demo opakovane poslať `STATUS` a jeden príkaz `SET A RED`. Výpis zachytí meniace sa fázy, `SET` vráti `ERR MODE` a cyklus pokračuje podľa tabuľky. Počas cestnej zelenej poslať `MODE CONTROL` a hneď po `OK` poslať `SET P GREEN`. Počas prepínania je očakávaná odpoveď `ERR BUSY`. |
 
+### Spoločná skúška na hotovom modeli
+
+1. Po resete skontrolujeme spoločnú červenú a zaznamenáme dva celé cykly Demo. Z časových značiek na videu určíme trvanie jednotlivých fáz a celého cyklu. Pri žltej očakávame 2 s, pri spoločnej červenej aspoň 1 s a pri celom cykle menovitých 30 s.
+2. Odošleme `MODE CONTROL` a cez `STATUS` počkáme na `READY=1`. Po `SET A GREEN` očakávame `OK` a zelenú na A. Potom pošleme `SET P GREEN`. Zariadenie má vrátiť `ERR CONFLICT` a výpis `STATUS` má ukázať `A=GREEN` a `P=RED`. Farby skontrolujeme aj priamo na modeli.
+3. Príkazom `SET A RED` ukončíme fázu A. Po žltej a spoločnej červenej počkáme na `READY=1` a zopakujeme `SET P GREEN`. Očakávame `OK`, zelenú na P a červenú na všetkých troch cestných semaforoch.
+
+K vyhodnoteniu priložíme namerané časy a záznam z terminálu s príkazmi a odpoveďami.
+
+## Vzdelávacie ciele
+
+- Nakonfigurovať GPIO v STM32CubeMX a overiť výstupy na fyzickom modeli.
+- Navrhnúť stavový automat s neblokujúcim časovaním a otestovať prechody medzi fázami.
+- Prijímať a odosielať dáta cez USART pomocou prerušení a spracovať platné aj chybné príkazy.
+- Dohodnúť rozhrania medzi modulmi v C a overiť ich spoluprácu na spoločnom modeli.
+
 ## Postup práce v repozitári
 
 1. Na vetve `main` pripravíme spoločný projekt v STM32CubeIDE, mapu pinov, typy pre rozhrania a súbor `README.md`. Konfiguráciu `.ioc` zapracuje Miroslav po dohode s Branislavom a Samuelom.
 2. Každý člen vyvinie a odskúša svoj modul vo vlastnej vetve. Do `main` sa zmeny dostanú po kontrole kolegom cez pull request.
-3. Prvá spoločná skúška prepojí terminál, automat a GPIO. V Control zapneme zelenú pre A a overíme, že požiadavka na zelenú pre P vráti `ERR CONFLICT`.
+3. Po spojení modulov overíme ich spoluprácu podľa [spoločnej skúšky na hotovom modeli](#spoločná-skúška-na-hotovom-modeli).
 4. Pred obhajobou zostavíme projekt z `main`, nahráme ho cez ST-LINK a vykonáme skúšky na hotovom modeli. Výsledky zaznamenáme spolu s mapou zapojenia a ukážkou komunikácie.
