@@ -1,0 +1,87 @@
+
+F1 - casovanie Demo (2 cykly, krok 1 ms)
+  t= 1000 ms  -> A_GREEN
+  t= 6000 ms  -> A_YELLOW
+  t= 8000 ms  -> ALL_RED
+  t= 9000 ms  -> B_GREEN
+  t=14000 ms  -> B_YELLOW
+  t=16000 ms  -> ALL_RED
+  t=17000 ms  -> C_GREEN
+  t=22000 ms  -> C_YELLOW
+  t=24000 ms  -> ALL_RED
+  t=25000 ms  -> P_GREEN
+  t=30000 ms  -> ALL_RED
+  t=31000 ms  -> A_GREEN
+  t=36000 ms  -> A_YELLOW
+  t=38000 ms  -> ALL_RED
+  t=39000 ms  -> B_GREEN
+  t=44000 ms  -> B_YELLOW
+  t=46000 ms  -> ALL_RED
+  t=47000 ms  -> C_GREEN
+  t=52000 ms  -> C_YELLOW
+  t=54000 ms  -> ALL_RED
+  t=55000 ms  -> P_GREEN
+  t=60000 ms  -> ALL_RED
+
+F1b - oneskorene volanie Update (krok 7 ms): zlta a spolocna cervena dostanu cely interval
+  zelena A skoncila v case 6006 ms (oneskorenie 6 ms)
+  zlta trvala 2000 ms, spolocna cervena 1000 ms
+
+F2 - kolizie v rezime Control
+  t=    0 ms  SET A GREEN      -> ERR MODE
+  t=    0 ms  MODE CONTROL     -> OK
+  t= 1000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
+  t= 1000 ms  SET A GREEN      -> OK
+  t= 3000 ms  SET B GREEN      -> ERR CONFLICT
+  t= 3000 ms  SET P GREEN      -> ERR CONFLICT
+  t= 3000 ms  SET A GREEN      -> OK
+  t= 3000 ms  SET A RED        -> OK
+  t= 4000 ms  SET B GREEN      -> ERR CONFLICT
+  t= 4000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=0 A=Y B=R C=R P=R
+  t= 5000 ms  -> ALL_RED
+  t= 5500 ms  SET B GREEN      -> ERR CONFLICT
+  t= 6000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
+  t= 6000 ms  SET P GREEN      -> OK
+  t= 6000 ms  SET C GREEN      -> ERR CONFLICT
+  t= 6000 ms  SET P YELLOW     -> ERR STATE
+  t= 6000 ms  SET B YELLOW     -> ERR STATE
+  t= 6000 ms  SET B RED        -> OK
+  t= 6000 ms  SET P RED        -> OK
+  t= 6000 ms  SET C GREEN      -> ERR CONFLICT
+  t= 7000 ms  SET C GREEN      -> OK
+  t=60000 ms  SET C YELLOW     -> OK
+  t=60000 ms  SET C RED        -> OK
+  t=62000 ms  -> ALL_RED
+  t=63000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
+
+F3 - prepnutie rezimu pocas cestnej zelenej a pocas zelenej pre chodcov
+  t= 1000 ms  -> A_GREEN
+  t= 3000 ms  MODE CONTROL     -> OK
+  t= 3000 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=Y B=R C=R P=R
+  t= 3000 ms  SET P GREEN      -> ERR BUSY
+  t= 3000 ms  MODE DEMO        -> ERR BUSY
+  t= 3000 ms  MODE CONTROL     -> OK
+  t= 5000 ms  -> ALL_RED
+  t= 5000 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=R B=R C=R P=R
+  t= 6000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
+  t=20000 ms  SET P GREEN      -> OK
+  t=22000 ms  MODE DEMO        -> OK
+  t=22000 ms  STATUS           -> MODE=CONTROL NEXT=DEMO READY=0 A=R B=R C=R P=R
+  t=23000 ms  -> A_GREEN
+  t=23000 ms  STATUS           -> MODE=DEMO NEXT=- READY=0 A=G B=R C=R P=R
+  t=23000 ms  MODE DEMO        -> OK
+  t=28000 ms  -> A_YELLOW
+
+F3b - prepnutie po uplynuti spolocnej cervenej prebehne ihned
+  t=30000 ms  -> ALL_RED
+  t=30500 ms  MODE CONTROL     -> OK
+  t=30500 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=R B=R C=R P=R
+  t=31000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
+  t=31000 ms  MODE CONTROL     -> OK
+  t=31000 ms  MODE DEMO        -> OK
+  t=31000 ms  STATUS           -> MODE=DEMO NEXT=- READY=0 A=G B=R C=R P=R
+
+F3c - pretecenie milisekundoveho casu (uint32_t)
+  t=    0 ms  -> A_GREEN
+
+98811 kontrol, 0 chyb -> VSETKY TESTY PRESLI
