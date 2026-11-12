@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="480" viewBox="0 0 840 480" role="img" aria-labelledby="title description">
+  <title id="title">Rozmiestnenie semaforov na T-križovatke</title>
+  <desc id="description">Pohľad zhora. A označuje vjazd zľava, B vjazd sprava, C vjazd zdola. Priechod P vedie cez dolnú vetvu križovatky. Šípky ukazujú smery príjazdu.</desc>
+
+  <rect width="840" height="480" fill="#f8fafc"/>
+  <path d="M34 115H806V259H529V465H311V259H34Z" fill="#485460"/>
+
+  <g fill="none" stroke="#d6dce2" stroke-width="2.5" stroke-dasharray="16 13">
+    <path d="M34 187H278M563 187H806"/>
+    <path d="M420 373V465"/>
+  </g>
+  <g fill="none" stroke="#f8fafc" stroke-width="4">
+    <path d="M278 196V259M563 115V178M428 384H529"/>
+  </g>
+
+  <g fill="#f8fafc">
+    <path d="M91 216H209V204L242 222 209 240V228H91Z"/>
+    <path d="M749 144H631V132L598 150 631 168V156H749Z"/>
+    <path d="M469 450V428H458L475 405 492 428H481V450Z"/>
+    <path d="M319 331h14v28h-14zM345 331h14v28h-14zM371 331h14v28h-14zM397 331h14v28h-14zM423 331h14v28h-14zM449 331h14v28h-14zM475 331h14v28h-14zM501 331h14v28h-14z"/>
+  </g>
+
+  <g fill="none" stroke="#687785" stroke-width="2">
+    <path d="M278 259V269M563 105V115M529 384H540M297 345H311"/>
+  </g>
+  <g fill="#263644">
+    <circle cx="278" cy="285" r="16"/>
+    <circle cx="563" cy="89" r="16"/>
+    <circle cx="556" cy="384" r="16"/>
+    <circle cx="281" cy="345" r="16"/>
+  </g>
+
+  <g font-family="system-ui, DejaVu Sans, sans-serif" font-size="19" font-weight="600" text-anchor="middle" fill="#ffffff">
+    <text x="278" y="292">A</text>
+    <text x="563" y="96">B</text>
+    <text x="556" y="391">C</text>
+    <text x="281" y="352">P</text>
+  </g>
+  <g font-family="system-ui, DejaVu Sans, sans-serif" font-size="19" fill="#263644">
+    <text x="254" y="292" text-anchor="end">Vjazd zľava</text>
+    <text x="539" y="96" text-anchor="end">Vjazd sprava</text>
+    <text x="580" y="391">Vjazd zdola</text>
+    <text x="257" y="352" text-anchor="end">Priechod</text>
+    <text x="420" y="40" text-anchor="middle" font-size="17" fill="#4a5a68">Hlavná cesta</text>
+  </g>
+</svg>
