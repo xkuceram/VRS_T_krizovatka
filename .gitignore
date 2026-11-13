@@ -1,0 +1,14 @@
+# STM32CubeIDE build output and local Eclipse workspace
+/Debug/
+/Release/
+/build/
+/.metadata/
+
+# KiCad local state and generated recovery files
+/schematic/.history/
+/schematic/*.kicad_prl
+/schematic/~*.lck
+/schematic/*-backups/
+/schematic/_autosave-*
+/schematic/#auto_saved_files#
+/schematic/fp-info-cache

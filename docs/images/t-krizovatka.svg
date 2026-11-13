@@ -1,103 +1,120 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" role="img" aria-labelledby="title description">
-  <title id="title">Pruhy a semafory na modeli T-križovatky</title>
-  <desc id="description">Pohľad zhora s vjazdom A zľava, dvoma príjazdovými pruhmi B_R a B_D sprava a vjazdom C zdola. Doplnková šípka A_S povoľuje odbočenie dole, C_S odbočenie doprava. Priechod P vedie cez dolnú vetvu. Infračervený lúč snímača C vedie cez príjazdový pruh pred stopčiarou.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="680" viewBox="0 0 1000 680" role="img" aria-labelledby="title description">
+  <title id="title">T-križovatka s jedným vjazdovým pruhom na C</title>
+  <desc id="description">Dolná vetva má zľava výjazd a jeden spoločný vjazd pre obe odbočenia. C povoľuje odbočenie doľava a C_S doprava. Jeden reflexný IR snímač na okraji vjazdu deteguje auto pri stopčiare. Zakreslené sú dráhy odbočenia, priechod P a tlačidlo. Kruhové značky označujú RGB LED.</desc>
   <defs>
     <marker id="lane-arrow" markerWidth="7" markerHeight="7" viewBox="0 0 10 10" refX="9" refY="5" orient="auto">
       <path d="M0 0L10 5L0 10Z" fill="#f8fafc"/>
     </marker>
-    <g id="three-lights">
-      <circle cx="0" cy="0" r="5" fill="#d7474b"/>
-      <circle cx="14" cy="0" r="5" fill="#dd9d20"/>
-      <circle cx="28" cy="0" r="5" fill="#26835c"/>
+    <linearGradient id="farby-rgb">
+      <stop offset="0" stop-color="#d7474b"/>
+      <stop offset=".5" stop-color="#e5a92c"/>
+      <stop offset="1" stop-color="#26835c"/>
+    </linearGradient>
+    <linearGradient id="farby-p">
+      <stop offset="0" stop-color="#d7474b"/>
+      <stop offset=".49" stop-color="#d7474b"/>
+      <stop offset=".51" stop-color="#26835c"/>
+      <stop offset="1" stop-color="#26835c"/>
+    </linearGradient>
+    <g id="rgb-svetlo">
+      <circle cx="14" cy="0" r="10" fill="url(#farby-rgb)" stroke="#546c7f" stroke-width="1.2"/>
+    </g>
+    <g id="rgb-priechod">
+      <circle cx="14" cy="0" r="10" fill="url(#farby-p)" stroke="#546c7f" stroke-width="1.2"/>
     </g>
     <g id="arrow-light">
       <rect x="-5" y="-10" width="39" height="20" rx="6" fill="#e4f3e9"/>
       <path d="M3 0h20m-7-6 7 6-7 6" fill="none" stroke="#21724d" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
     </g>
   </defs>
-  <rect width="1000" height="620" fill="#f8fafc"/>
+  <rect width="1000" height="680" fill="#f8fafc"/>
   <g font-family="DejaVu Sans, sans-serif">
     <text x="39" y="60" font-size="28" font-weight="700" fill="#233342">T-križovatka</text>
-    <text x="40" y="91" font-size="17" fill="#526373">Pohľad zhora · hlavná cesta vodorovne</text>
-    <path d="M40 164H960V365H604V595H396V365H40Z" fill="#485460"/>
+    <text x="40" y="91" font-size="17" fill="#526373">Spoločný vjazd na C s jedným IR snímačom</text>
+    <path d="M40 164H960V365H610V651H390V365H40Z" fill="#485460"/>
     <g fill="none" stroke="#d6dce2" stroke-width="2.5" stroke-dasharray="15 11">
       <path d="M40 264H350M650 264H960"/>
-      <path d="M680 214H960M500 372V408M500 459V595"/>
+      <path d="M680 214H960M500 366V410M500 459V651"/>
     </g>
-    <path d="M332 275V365M669 164V254M509 473H604" fill="none" stroke="#f8fafc" stroke-width="4"/>
+    <g id="drahy-odbocenia" fill="none" stroke-width="2.3" stroke-dasharray="6 6" stroke-linecap="round">
+      <path id="a-do-c" d="M333 309H351Q445 309 445 374V409" stroke="#aebcc8"/>
+      <path id="b-do-c" d="M669 233H568C500 233 445 295 445 374V409" stroke="#aebcc8"/>
+      <path id="c-do-a" d="M555 409V301Q555 212 451 212H333" stroke="#80ded3"/>
+      <path id="c-do-b" d="M555 409V377Q555 315 650 315H669" stroke="#a9c9ff"/>
+    </g>
+    <path d="M332 275V365M669 164V254M503 475H608" fill="none" stroke="#f8fafc" stroke-width="4"/>
     <g fill="none" stroke="#f8fafc" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#lane-arrow)">
       <path d="M130 309H291"/>
       <path d="M196 309H221Q249 309 249 332V349"/>
       <path d="M865 190H713"/>
+      <path d="M445 553V606"/>
     </g>
     <g fill="none" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-      <path id="arrow-b-d" d="M865 233H750a14 14 0 0 0-14 14v6"/>
-      <path id="arrow-c" d="M552 573V548M518 534h17q17 0 17 16q0-16 17-16h17"/>
+      <path id="sipka-b-d" d="M865 233H750a14 14 0 0 0-14 14v6"/>
+      <path id="sipka-c-spolocna" d="M555 605V576Q555 557 536 557H518M555 576Q555 557 574 557H592"/>
     </g>
-    <path d="M727 248H745L736 260ZM522 525L509 534L522 543ZM582 525L595 534L582 543Z" fill="#f8fafc"/>
+    <path d="M727 248H745L736 260ZM521 548L508 557L521 566ZM589 548L602 557L589 566Z" fill="#f8fafc"/>
     <g fill="#f8fafc" font-size="16" font-weight="700">
       <text x="63" y="316">A</text>
       <text x="904" y="196">B_R</text>
       <text x="904" y="244">B_D</text>
-      <text x="544" y="589">C</text>
     </g>
-    <g fill="#f8fafc">
-      <path d="M404 420h14v29h-14zM429 420h14v29h-14zM454 420h14v29h-14zM479 420h14v29h-14zM504 420h14v29h-14zM529 420h14v29h-14zM554 420h14v29h-14zM579 420h14v29h-14z"/>
+    <g fill="#e7eef4" font-size="13" text-anchor="middle">
+      <text x="445" y="629">Výjazd</text>
+      <text x="555" y="629">Vjazd C</text>
     </g>
-    <circle cx="382" cy="434" r="13" fill="#314354"/>
-    <text x="382" y="440" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">P</text>
-    <circle cx="624" cy="434" r="5" fill="#d7474b"/>
-    <circle cx="638" cy="434" r="5" fill="#26835c"/>
-    <text x="656" y="440" font-size="15" fill="#34485a">Priechod</text>
-    <path d="M375 461h17" stroke="#708090" stroke-width="1.5"/>
-    <circle cx="394" cy="461" r="4" fill="#314354"/>
-    <text x="364" y="466" text-anchor="end" font-size="13" fill="#526373">Tlačidlo</text>
+    <path d="M394 420h14v29h-14zM416 420h14v29h-14zM438 420h14v29h-14zM460 420h14v29h-14zM482 420h14v29h-14zM504 420h14v29h-14zM526 420h14v29h-14zM548 420h14v29h-14zM570 420h14v29h-14zM592 420h14v29h-14z" fill="#f8fafc"/>
+    <circle cx="375" cy="434" r="13" fill="#314354"/>
+    <text x="375" y="440" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">P</text>
+    <use href="#rgb-priechod" x="622" y="434"/>
+    <text x="659" y="440" font-size="15" fill="#34485a">Priechod</text>
+    <path d="M389 463h-22v34" fill="none" stroke="#708090" stroke-width="1.5"/>
+    <circle cx="389" cy="463" r="4" fill="#314354"/>
+    <text x="376" y="513" text-anchor="end" font-size="13" fill="#526373">Tlačidlo P</text>
+
     <g id="sensor-c">
-      <title>IR snímač C pre prítomnosť auta</title>
-      <path d="M517 493H598" fill="none" stroke="#6ae1d8" stroke-width="2.5" stroke-dasharray="5 5" stroke-linecap="round"/>
-      <rect x="505" y="486" width="12" height="14" rx="2.5" fill="#72e3d8" stroke="#1d6769" stroke-width="1.4">
-        <title>Vysielač</title>
-      </rect>
-      <rect x="598" y="486" width="12" height="14" rx="2.5" fill="#72e3d8" stroke="#1d6769" stroke-width="1.4">
-        <title>Prijímač</title>
-      </rect>
-      <path d="M611 493h14q9 0 9 9v68q0 9 9 9h7" fill="none" stroke="#438c8f" stroke-width="1.5"/>
+      <title>Reflexný IR snímač CAR_C pri stopčiare spoločného vjazdu</title>
+      <path d="M610 503 539 487V519Z" fill="#80ded3" fill-opacity=".24" stroke="#80ded3" stroke-width="1.7" stroke-dasharray="4 4" stroke-linejoin="round"/>
+      <rect x="608" y="494" width="16" height="18" rx="3" fill="#80ded3" stroke="#1d6769" stroke-width="1.4"/>
+      <circle cx="613" cy="503" r="2.3" fill="#1d6769"/>
+      <text x="630" y="508" font-size="13" font-weight="700" fill="#236b66">IR</text>
     </g>
 
     <g fill="#fff" stroke="#dbe3eb" stroke-width="1.4">
       <rect x="42" y="389" width="263" height="108" rx="11"/>
       <rect x="650" y="24" width="310" height="117" rx="11"/>
-      <rect x="650" y="459" width="310" height="142" rx="11"/>
+      <rect x="654" y="459" width="306" height="155" rx="11"/>
     </g>
     <g font-size="15" font-weight="700" fill="#273a4a">
       <text x="57" y="414">Vjazd zľava</text>
       <text x="668" y="50">Vjazd sprava</text>
-      <text x="668" y="485">Vjazd zdola</text>
+      <text x="670" y="485">Spoločný vjazd zdola</text>
     </g>
     <g font-size="14" font-weight="700" fill="#273a4a">
       <text x="57" y="445">A</text>
       <text x="57" y="476">A_S</text>
       <text x="668" y="82">B_R</text>
       <text x="668" y="113">B_D</text>
-      <text x="668" y="517">C</text>
-      <text x="668" y="549">C_S</text>
+      <text x="670" y="517">C</text>
+      <text x="670" y="549">C_S</text>
     </g>
-    <use href="#three-lights" x="104" y="440"/>
+    <use href="#rgb-svetlo" x="104" y="440"/>
     <use href="#arrow-light" x="104" y="471"/>
-    <use href="#three-lights" x="723" y="77"/>
-    <use href="#three-lights" x="723" y="108"/>
-    <use href="#three-lights" x="723" y="512"/>
+    <use href="#rgb-svetlo" x="723" y="77"/>
+    <use href="#rgb-svetlo" x="723" y="108"/>
+    <use href="#rgb-svetlo" x="723" y="512"/>
     <use href="#arrow-light" x="723" y="544"/>
     <g font-size="14" fill="#40566a">
       <text x="151" y="445">Rovno alebo dole</text>
       <text x="151" y="476">Dole pri červenej A</text>
       <text x="771" y="82">Rovno doľava</text>
       <text x="771" y="113">Odbočenie dole</text>
-      <text x="771" y="517">Doľava alebo doprava</text>
-      <text x="771" y="549">Doprava pri červenej C</text>
+      <text x="771" y="517">Doľava na A</text>
+      <text x="771" y="549">Doprava na B</text>
+      <text x="703" y="592">Snímač prítomnosti · CAR_C</text>
     </g>
-    <path d="M668 562h274" stroke="#dbe3eb" stroke-width="1"/>
-    <path d="M668 579h32" stroke="#258d8e" stroke-width="2.4" stroke-dasharray="4 4" stroke-linecap="round"/>
-    <text x="712" y="584" font-size="14" fill="#285d64">IR snímač C · prítomnosť auta</text>
+    <path d="M670 563h274" stroke="#dbe3eb" stroke-width="1"/>
+    <rect x="671" y="580" width="17" height="14" rx="3" fill="#80ded3" stroke="#1d6769" stroke-width="1.4"/>
+    <circle cx="679.5" cy="587" r="2.2" fill="#1d6769"/>
   </g>
 </svg>
