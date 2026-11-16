@@ -176,7 +176,7 @@ OK MODE=CONTROL NEXT=- READY=1 A=RED A_S=OFF B_R=RED B_D=RED C=RED C_S=OFF P=RED
 
 <sub>model-gpio</sub>
 
-![KiCad schematic of the traffic lights and inputs](schematic/schematic.svg)
+![KiCad schematic of the traffic lights and inputs](docs/schematic/schematic.svg)
 
 The KiCad draft uses the STM32F303K8Tx microcontroller symbol, twelve 330 Ω resistors and the TSSP58038 IR receiver symbol. The NUCLEO-F303K8 prototype will use the FC-51 module wired as shown in the input pin table below. <sub>· model-gpio</sub>
 

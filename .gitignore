@@ -5,10 +5,10 @@
 /.metadata/
 
 # KiCad local state and generated recovery files
-/schematic/.history/
-/schematic/*.kicad_prl
-/schematic/~*.lck
-/schematic/*-backups/
-/schematic/_autosave-*
-/schematic/#auto_saved_files#
-/schematic/fp-info-cache
+/docs/schematic/.history/
+/docs/schematic/*.kicad_prl
+/docs/schematic/~*.lck
+/docs/schematic/*-backups/
+/docs/schematic/_autosave-*
+/docs/schematic/#auto_saved_files#
+/docs/schematic/fp-info-cache

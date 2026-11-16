@@ -50,12 +50,16 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_A_RED_Pin|LED_A_GREEN_Pin|LED_BR_RED_Pin|LED_BR_GREEN_Pin
-                          |LED_BD_RED_Pin|LED_BD_GREEN_Pin|LED_AS_GREEN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_A_RED_Pin|LED_BR_RED_Pin|LED_BD_RED_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LED_C_RED_Pin|LED_C_GREEN_Pin|LED_CS_GREEN_Pin|LED_P_GREEN_Pin
-                          |LED_P_RED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_A_GREEN_Pin|LED_BR_GREEN_Pin|LED_BD_GREEN_Pin|LED_AS_GREEN_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, LED_C_RED_Pin|LED_P_RED_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, LED_C_GREEN_Pin|LED_CS_GREEN_Pin|LED_P_GREEN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : LED_A_RED_Pin LED_A_GREEN_Pin LED_BR_RED_Pin LED_BR_GREEN_Pin
                            LED_BD_RED_Pin LED_BD_GREEN_Pin LED_AS_GREEN_Pin */

@@ -176,7 +176,7 @@ OK MODE=CONTROL NEXT=- READY=1 A=RED A_S=OFF B_R=RED B_D=RED C=RED C_S=OFF P=RED
 
 <sub>model-gpio</sub>
 
-![Schéma zapojenia semaforov a vstupov v KiCade](schematic/schematic.svg)
+![Schéma zapojenia semaforov a vstupov v KiCade](docs/schematic/schematic.svg)
 
 Pracovná schéma z KiCadu používa symbol mikrokontroléra STM32F303K8Tx, 12 rezistorov po 330 Ω a symbol IR prijímača TSSP58038. Na prototype s doskou NUCLEO-F303K8 použijeme modul FC-51, ktorý pripojíme podľa tabuľky vstupov nižšie. <sub>· model-gpio</sub>
 
