@@ -2,23 +2,24 @@
 
 Autor: Branislav Krajčovič · vetva `feature/traffic-fsm` · súbory `Core/Inc/traffic_fsm.h`, `Core/Src/traffic_fsm.c`
 
-Automat rozhoduje o režime, fáze svetiel a výsledku požiadaviek z terminálu. Nepoužíva HAL ani blokujúce čakanie. Aktuálny čas v milisekundách (`HAL_GetTick()`) dostáva ako parameter, preto sa dá otestovať aj na PC so simulovaným časom. Výstupom je jedna fáza typu `TrafficPhase`.
+Automat rozhoduje o režime, fáze svetiel a výsledku príkazov z terminálu. Nepoužíva HAL ani blokujúce čakanie. Aktuálny čas v milisekundách (`HAL_GetTick()`) a vyfiltrované vstupy dostáva ako parametre. Celý sa preto dá otestovať na PC so simulovaným časom (`tests/test_traffic_fsm.c`).
 
-Podľa prednášky *Prerušenia – abstrakcia od HW* je aplikačná logika oddelená od hardvérovej vrstvy. Automat nevolá ovládač GPIO priamo. Zmenu fázy oznamuje cez **zaregistrovanú callback funkciu**, v projekte `TrafficGpio_Apply`. Ovládač GPIO sa dá vymeniť alebo nahradiť simulovaným bez zmeny automatu, čo využívajú testy na PC. Callback sa registruje pred spustením automatu a pred jeho volaním sa kontroluje, či nie je `NULL`.
+Aplikačná logika je oddelená od hardvéru. Automat nevolá ovládač GPIO priamo. Každú zmenu svetiel oznámi cez **zaregistrovanú callback funkciu**, ktorá dostane stav všetkých siedmich signálov (`TrafficSignals`). V projekte je callbackom `apply_signals` v `main.c`, ktorá stav odovzdá do `TrafficGpio_ApplyOutputs`. Vstupy číta a filtruje modul `traffic_inputs` (Miroslav). Automat dostane už hotové hodnoty `CAR_C` a jednorazovú udalosť stlačenia tlačidla.
 
-Všetky funkcie automatu sa volajú z hlavnej slučky, nie z obsluhy prerušenia (modul USART v prerušení len prijíma znaky a celé riadky spracúva v slučke). Stav automatu preto nie je zdieľaný s prerušením a nepotrebuje kvalifikátor `volatile`.
+Všetky funkcie automatu sa volajú z hlavnej slučky, nie z obsluhy prerušenia. Stav automatu preto nepotrebuje kvalifikátor `volatile`.
 
 ## Rozhranie
 
 | Funkcia | Použitie |
 | --- | --- |
-| `TrafficFsm_RegisterPhaseCallback(callback)` | Registrácia funkcie volanej pri každej zmene fázy (napr. `TrafficGpio_Apply`). Volať pred `TrafficFsm_Init`. |
-| `TrafficFsm_Init(now)` | Po inicializácii spoločná červená, režim Demo začne zelenou pre A po 1 s. |
-| `TrafficFsm_Update(now)` | Volá sa v každom prechode hlavnej slučky. Vyhodnotí časovanie, pri zmene fázy zavolá callback a vráti aktuálnu fázu. |
-| `TrafficFsm_RequestMode(mode, now)` | Príkaz `MODE DEMO` / `MODE CONTROL`. |
-| `TrafficFsm_RequestColor(light, color, now)` | Príkaz `SET <semafor> <farba>`. |
-| `TrafficFsm_GetStatus(now, &status)` | Údaje pre `STATUS`: aktívny režim, cieľový režim (`NEXT`), `READY`, fáza. |
-| `TrafficFsm_PhaseColor(phase, light)` | Farba semafora v danej fáze (napr. pre výpis farieb z fázy aplikovanej na GPIO). |
+| `TrafficFsm_RegisterOutputCallback(cb)` | Funkcia volaná pri každej zmene svetiel. Registrovať pred `TrafficFsm_Init`. `NULL` = bez callbacku. |
+| `TrafficFsm_Init(now)` | Spoločná červená (päť červených, šípky zhasnuté), režim Demo. Vymaže čakajúcu požiadavku chodcov. |
+| `TrafficFsm_Update(now, car_c, ped_pressed)` | V každom prechode hlavnej slučky. Vyhodnotí časovanie a vstupy, pri zmene svetiel zavolá callback. |
+| `TrafficFsm_RequestMode(mode)` | Príkaz `MODE DEMO` / `MODE CONTROL`. |
+| `TrafficFsm_RequestSignal(target, color)` | Príkaz `SET <cieľ> <farba>`. Ciele `A`, `A_S`, `B_R`, `B_D`, `C`, `C_S`, `P` a `B` (oba B). |
+| `TrafficFsm_GetStatus(&status)` | Údaje pre `STATUS`: režim, `NEXT`, `READY`, farby, šípky, `CAR_C`, `P_REQ`. |
+
+Požiadavky používajú čas posledného volania `TrafficFsm_Update`. Rozdiel je najviac jeden prechod slučky.
 
 Výsledok požiadavky (`TrafficResult`) zodpovedá odpovediam protokolu:
 
@@ -31,115 +32,173 @@ Výsledok požiadavky (`TrafficResult`) zodpovedá odpovediam protokolu:
 | `TRAFFIC_RESULT_ERR_CONFLICT` | `ERR CONFLICT` |
 | `TRAFFIC_RESULT_ERR_PARAM` | neplatný parameter, modul USART ho zachytí skôr ako `ERR SYNTAX` |
 
-Použitie v hlavnej slučke:
+Použitie v hlavnej slučke (`main.c`):
 
 ```c
 TrafficGpio_Init();
-TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   /* pred spustením automatu */
-TrafficFsm_Init(HAL_GetTick());                        /* oznámi spoločnú červenú */
+TrafficInputs_Init(HAL_GetTick());
+TrafficFsm_RegisterOutputCallback(apply_signals);   /* pred spustením automatu */
+TrafficFsm_Init(HAL_GetTick());                     /* oznámi spoločnú červenú */
 while (1)
 {
-    TrafficFsm_Update(HAL_GetTick());                  /* zmenu fázy oznámi callback */
-    /* modul USART: príkazy -> TrafficFsm_RequestMode / TrafficFsm_RequestColor */
+    const uint32_t now_ms = HAL_GetTick();
+    TrafficInputs_Update(now_ms);
+    TrafficFsm_Update(now_ms, TrafficInputs_IsCarPresent(), TrafficInputs_TakePedestrianPress());
 }
 ```
+
+### Napojenie modulu USART
+
+Modul `traffic_serial` (Samuel) volá automat cez `TrafficSerialHandlers`. Enumy `SerialTarget` a `TrafficTarget` majú rovnaké poradie. `SerialColor`, `SerialMode` a `SerialResult` zodpovedajú `TrafficColor`, `TrafficMode` a `TrafficResult`. Pri spájaní vetiev stačí do `main.c` doplniť tri krátke funkcie:
+
+```c
+static SerialResult fsm_request_mode(SerialMode mode)
+{
+  return (SerialResult)TrafficFsm_RequestMode((TrafficMode)mode);
+}
+
+static SerialResult fsm_request_signal(SerialTarget target, SerialColor color)
+{
+  return (SerialResult)TrafficFsm_RequestSignal((TrafficTarget)target, (TrafficColor)color);
+}
+
+static void fsm_get_status(SerialStatus *out)
+{
+  TrafficFsmStatus st;
+  TrafficFsm_GetStatus(&st);
+  out->mode = (SerialMode)st.mode;
+  out->next = (SerialMode)st.next_mode;
+  out->ready = st.ready;
+  out->a = (SerialColor)st.signals.a;
+  out->b_r = (SerialColor)st.signals.b_r;
+  out->b_d = (SerialColor)st.signals.b_d;
+  out->c = (SerialColor)st.signals.c;
+  out->p = (SerialColor)st.signals.p;
+  out->a_s = st.signals.a_s_on;
+  out->c_s = st.signals.c_s_on;
+  out->car_c = st.car_c;
+  out->p_req = st.p_req;
+}
+
+static const TrafficSerialHandlers serial_handlers =
+{
+  fsm_request_mode, fsm_request_signal, fsm_get_status
+};
+```
+
+`TRAFFIC_RESULT_ERR_PARAM` sa do protokolu nedostane, lebo parser odmietne neplatný cieľ, farbu aj režim skôr ako `ERR SYNTAX`.
+
+## Fázy
+
+Fáza je množina signálov, ktoré svietia nazeleno (bežné semafory) alebo svietia (šípky). Ostatné bežné semafory sú na červenej a ostatné šípky zhasnuté. Vnútorne je fáza uložená ako bitová maska.
+
+| Fáza | `A` | `A_S` | `B_R` | `B_D` | `C` | `C_S` | `P` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `PHASE_A` | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
+| `PHASE_C_LEFT` | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
+| `PHASE_B_WITH_CS` | 0 | 0 | 1 | 1 | 0 | 1 | 0 |
+| `PHASE_B_FREE` | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
+| `PHASE_PED` | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+
+V Control zapína príkaz `SET <cieľ> GREEN` práve signály daného cieľa, teda jeden semafor, jednu šípku, P alebo oba B.
 
 ## Stav automatu
 
 | Premenná | Hodnoty | Význam |
 | --- | --- | --- |
-| `active_mode` | `DEMO`, `CONTROL` | aktívny režim |
+| `mode` | `DEMO`, `CONTROL` | aktívny režim |
 | `next_mode` | `NONE`, `DEMO`, `CONTROL` | cieľový režim počas prepínania |
-| `phase` | `ALL_RED`, `A/B/C_GREEN`, `A/B/C_YELLOW`, `P_GREEN` | aktuálna fáza (výstup pre GPIO) |
-| `phase_start_ms` | čas | vstup do fázy, od neho sa meria trvanie |
-| `demo_step` | 0 – 10 | krok cyklu Demo |
+| `stage` | `ALL_RED`, `GREEN`, `YELLOW` | etapa fázy |
+| `green_mask` | maska signálov | zelené signály v etape `GREEN` |
+| `yellow_mask` | maska signálov | bežné semafory so žltou v etape `YELLOW` |
+| `stage_start_ms` | čas | vstup do etapy, od neho sa meria trvanie |
+| `demo_next` | `A`, `DECIDE`, `C_LEFT`, `B_WITH_CS`, `B_FREE` | nasledujúca cestná fáza v Demo |
+| `ped_may_follow` | 0/1 | posledná ukončená fáza Demo bola cestná, takže môžu nasledovať chodci |
+| `p_req` | 0/1 | čakajúca požiadavka chodcov |
+| `car_c` | 0/1 | obsadenosť vjazdu C z posledného `Update` |
 
-Trvanie fázy sa meria od skutočného vstupu do fázy. Žltá aj spoločná červená preto dostanú celý interval, aj keď predchádzajúca fáza skončí s oneskorením. Rozdiel časov typu `uint32_t` funguje aj pri pretečení milisekundového času.
+Trvanie etapy sa meria od skutočného vstupu do nej. Žltá aj spoločná červená preto dostanú celý interval, aj keď sa predchádzajúca etapa skončí s oneskorením. Rozdiel časov typu `uint32_t` funguje aj pri pretečení milisekundového času.
 
-Časovanie: zelená v Demo **5 s**, žltá **2 s**, spoločná červená **1 s** (`TRAFFIC_GREEN_MS`, `TRAFFIC_YELLOW_MS`, `TRAFFIC_ALL_RED_MS`).
+Časovanie: zelená v Demo **5 s** (cestná aj chodci), žltá **2 s**, spoločná červená najmenej **1 s** (`TRAFFIC_GREEN_MS`, `TRAFFIC_YELLOW_MS`, `TRAFFIC_ALL_RED_MS`).
 
-## Tabuľka prechodov – časové (funkcia `TrafficFsm_Update`)
+## Tabuľka prechodov
 
-| Podmienka | Aktuálna fáza | Uplynulý čas | Nová fáza / akcia |
+### Etapy (spoločné pre Demo aj Control)
+
+| Z etapy | Podmienka | Do etapy | Poznámka |
 | --- | --- | --- | --- |
-| Demo, bez prepínania | krok *k* cyklu | ≥ trvanie kroku *k* | krok *k+1* (po kroku 11 krok 1) |
-| Control, bez prepínania | `X_YELLOW` | ≥ 2 s | `ALL_RED` |
-| Control, bez prepínania | `X_GREEN`, `P_GREEN`, `ALL_RED` | – | bez zmeny (čaká na príkaz) |
-| prebieha prepínanie | `X_YELLOW` | ≥ 2 s | `ALL_RED` |
-| prebieha prepínanie | `ALL_RED` | ≥ 1 s | aktivácia cieľového režimu: Demo → `A_GREEN` (krok 1), Control → zostáva `ALL_RED` |
+| `GREEN` | ukončenie fázy, fáza má zelený bežný semafor | `YELLOW` | šípky zhasnú hneď, zelené bežné semafory prejdú na žltú |
+| `GREEN` | ukončenie fázy, iba šípka alebo P | `ALL_RED` | bez žltej |
+| `YELLOW` | uplynuli 2 s | `ALL_RED` | |
+| `ALL_RED` | uplynula 1 s a čaká prepnutie režimu | `ALL_RED` | aktivuje sa cieľový režim |
+| `ALL_RED` | uplynula 1 s, Demo | `GREEN` | ďalšia fáza podľa `demo_next` a `p_req` |
+| `ALL_RED` | uplynula 1 s, Control, `SET … GREEN` | `GREEN` | iba pri `READY=1` |
 
-Po inicializácii: režim Demo, fáza `ALL_RED`, krok 11, takže po 1 s nasleduje krok 1 (`A_GREEN`).
+Fázu ukončí: v Demo uplynutie 5 s zelenej, v Control príkaz `SET … YELLOW/RED` a v oboch režimoch požiadavka na zmenu režimu.
 
-Cyklus Demo (30 s):
+### Výber fázy v Demo
 
-| Krok | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Fáza | A_GREEN | A_YELLOW | ALL_RED | B_GREEN | B_YELLOW | ALL_RED | C_GREEN | C_YELLOW | ALL_RED | P_GREEN | ALL_RED |
-| Trvanie | 5 s | 2 s | 1 s | 5 s | 2 s | 1 s | 5 s | 2 s | 1 s | 5 s | 1 s |
+| `demo_next` pri konci ochrannej červenej | `p_req` a `ped_may_follow` | Zapne | Nový `demo_next` |
+| --- | --- | --- | --- |
+| ľubovoľný | oba 1 | `PHASE_PED` | nezmení sa (naplánovaná fáza príde po chodcoch) |
+| `A` | inak | `PHASE_A` | `DECIDE` |
+| `DECIDE` → podľa `CAR_C` | | | `C_LEFT` pri `CAR_C=1`, `B_FREE` pri `CAR_C=0`, potom podľa riadkov nižšie |
+| `C_LEFT` | inak | `PHASE_C_LEFT` | `B_WITH_CS` (aj keď sa vjazd medzitým uvoľní) |
+| `B_WITH_CS` | inak | `PHASE_B_WITH_CS` | `A` |
+| `B_FREE` | inak | `PHASE_B_FREE` | `A` |
 
-## Tabuľka prechodov – požiadavky
+Obsadenosť C sa vyhodnotí raz, na konci ochrannej sekundy po fáze A. Ak čakajú chodci, rozhodnutie platí aj pre fázu, ktorá príde po nich. Po štarte aj po návrate do Demo začne automat fázou A. Čakajúca požiadavka chodcov sa vybaví až po nej.
 
-### `MODE <režim>` (funkcia `TrafficFsm_RequestMode`)
+Stlačenie tlačidla nastaví `p_req`. Stlačenie počas zelenej pre P patrí do prebiehajúcej fázy a ignoruje sa. Požiadavka sa vymaže pri zapnutí zelenej pre P (v Demo automaticky, v Control príkazom `SET P GREEN`) a pri inicializácii.
 
-| Stav | Výsledok | Akcia |
+### Príkazy v Control
+
+| Príkaz | Podmienka | Výsledok |
 | --- | --- | --- |
-| prepínanie, cieľ = požadovaný režim | `OK` | prechod pokračuje podľa pôvodného časovania |
-| prepínanie, požadovaný je opúšťaný režim | `ERR BUSY` | – |
-| požadovaný režim je už aktívny | `OK` | len potvrdenie |
-| iný režim, fáza `X_GREEN` (cestná) | `OK` | `next_mode` = cieľ, prechod na `X_YELLOW` |
-| iný režim, fáza `P_GREEN` | `OK` | `next_mode` = cieľ, prechod na `ALL_RED` |
-| iný režim, fáza `X_YELLOW` | `OK` | `next_mode` = cieľ, žltá dobehne |
-| iný režim, `ALL_RED` kratšie ako 1 s | `OK` | `next_mode` = cieľ, interval dobehne |
-| iný režim, `ALL_RED` aspoň 1 s | `OK` | cieľový režim sa aktivuje ihneď |
+| ľubovoľný `SET` | prebieha prepínanie | `ERR BUSY` |
+| ľubovoľný `SET` | režim Demo | `ERR MODE` |
+| `SET <cieľ> GREEN` | všetky signály cieľa už svietia | `OK`, bez zmeny |
+| `SET <cieľ> GREEN` | `READY=1` | `OK`, zapne signály cieľa |
+| `SET <cieľ> GREEN` | iná aktívna fáza, žltá alebo ochranná červená | `ERR CONFLICT` |
+| `SET <cieľ> YELLOW` | cieľ obsahuje práve zelený bežný semafor | `OK`, ukončí fázu |
+| `SET <cieľ> YELLOW` | inak (aj šípky a P) | `ERR STATE` |
+| `SET <cieľ> RED` | cieľ obsahuje práve zelený signál | `OK`, ukončí celú fázu |
+| `SET <cieľ> RED` | inak | `OK`, bez zmeny časovania |
 
-### `SET <semafor> <farba>` (funkcia `TrafficFsm_RequestColor`)
+`READY=1` platí v ustálenom Control pri spoločnej červenej, ktorá trvá aspoň 1 s.
 
-Kontroly sa vyhodnocujú v tomto poradí:
+### Prepnutie režimu
 
-| Stav | Výsledok |
+| Situácia | Výsledok |
 | --- | --- |
-| prebieha prepínanie režimu | `ERR BUSY` |
-| aktívny režim Demo | `ERR MODE` |
+| požadovaný režim je aktívny a neprebieha prepínanie | `OK`, potvrdenie |
+| prebieha prepínanie na ten istý cieľ | `OK`, časovanie pokračuje |
+| prebieha prepínanie a príde požiadavka na opúšťaný režim | `ERR BUSY` |
+| nový cieľ | `OK`, aktívna zelená sa ukončí podľa pravidiel, cieľ sa aktivuje po ochrannej sekunde. Ak už uplynula, hneď. |
 
-V aktívnom režime Control:
+Po aktivácii Control sú všetky semafory na červenej a automat čaká na príkaz. Po aktivácii Demo hneď začne fáza A.
 
-| Príkaz | Aktuálna fáza | Výsledok | Akcia |
-| --- | --- | --- | --- |
-| `SET X GREEN` | `X_GREEN` (tento semafor už svieti nazeleno) | `OK` | bez zmeny |
-| `SET X GREEN` | iná zelená, akákoľvek žltá, `ALL_RED` kratšie ako 1 s | `ERR CONFLICT` | bez zmeny |
-| `SET X GREEN` | `ALL_RED` aspoň 1 s (`READY=1`) | `OK` | `X_GREEN` |
-| `SET X YELLOW` (X = A, B, C) | `X_GREEN` | `OK` | `X_YELLOW`, po 2 s `ALL_RED` |
-| `SET X YELLOW` (X = A, B, C) | iná fáza (X nemá zelenú) | `ERR STATE` | bez zmeny |
-| `SET P YELLOW` | ľubovoľná | `ERR STATE` | bez zmeny |
-| `SET X RED` (X = A, B, C) | `X_GREEN` | `OK` | `X_YELLOW`, po 2 s `ALL_RED` |
-| `SET P RED` | `P_GREEN` | `OK` | `ALL_RED` (začína interval spoločnej červenej) |
-| `SET X RED` | `X_YELLOW` | `OK` | žltá dobehne |
-| `SET X RED` | X svieti načerveno | `OK` | potvrdenie stavu |
+## Overenie
 
-Pri odmietnutí príkazu sa stav nemení a pokračuje naplánované časovanie aktuálnej fázy.
+Testy na PC: `cd tests && make`. Testy hlásia **10 858 kontrol, 0 chýb**. Priebeh svetiel je v `tests/vysledky_F1_F3.txt`.
 
-`READY = 1` platí, keď je aktívny Control, neprebieha prepínanie a spoločná červená trvá aspoň 1 s.
+Pri každej zmene svetiel testy kontrolujú bezpečnostné pravidlá:
 
-## Skúšky F1 – F3
+- povolené sú iba kombinácie zelených z tabuľky fáz alebo jednotlivé voľby v Control,
+- `A_S` svieti iba pri červenej na A a `C_S` iba pri červenej na C,
+- `A_S` nikdy nesvieti súčasne so zelenou `B_D`,
+- pri zelenej pre P je všetko ostatné na červenej a P nemá žltú,
+- žltá trvá celé 2 s a po nej nasleduje spoločná červená,
+- každej novej zelenej predchádza aspoň 1 s spoločnej červenej.
 
-Testy sú v `tests/test_traffic_fsm.c`. Automat dostáva simulovaný čas, takže sa dajú spustiť na PC bez dosky:
+| Skúška | Čo test overuje |
+| --- | --- |
+| **F1 – Obsluha vjazdu C** | Voľný vjazd A → B → A (cyklus 16 s). Obsadený vjazd A → C doľava → B s `C_S` → A. Auto odíde počas C doľava a fáza s `C_S` aj tak prebehne, v ďalšom cykle už B bez `C_S`. Auto príde počas B a vyhodnotí sa až po ďalšej fáze A. |
+| **F2 – Šípky, kolízie a chodci** | Tlačidlo počas zelenej A: P až po žltej a spoločnej červenej, potom naplánovaná fáza. Stlačenie počas zelenej P sa ignoruje. V Control `SET A_S GREEN` pri zelenej `B_D` → `ERR CONFLICT`. Nová zelená počas žltej a ochrannej červenej → `ERR CONFLICT`, po 1 s → `OK`. `SET A_S YELLOW` → `ERR STATE`. Kroky spoločnej skúšky č. 3. |
+| **F3 – Prepnutie režimu** | Počas B s `C_S` tlačidlo a `MODE CONTROL`: `C_S` zhasne, oba B na žltú, spoločná červená, potom `MODE=CONTROL READY=1 P_REQ=1`. `SET` počas prepínania → `ERR BUSY`, návrat do Demo → `ERR BUSY`. `SET P GREEN`, potom `MODE DEMO`: P rovno na červenú, po 1 s fáza A. Okamžité prepnutie pri uplynutej ochrannej sekunde. |
+| Ďalšie | Pretečenie `uint32_t` času, beh bez callbacku a dvojhodinová náhodná simulácia so vstupmi aj príkazmi, pri ktorej sa kontrolujú pravidlá vyššie. |
 
-```
-cd tests
-make
-```
+## Poznámky k spoločným súborom
 
-(alebo `gcc -std=c99 -Wall -I../Core/Inc test_traffic_fsm.c ../Core/Src/traffic_fsm.c -o test_traffic_fsm`)
-
-Každý krok simulácie navyše kontroluje bezpečnostné pravidlo, že najviac jeden semafor nesvieti načerveno. Úplný výpis je v `tests/vysledky_F1_F3.txt`.
-
-| Skúška | Overené | Výsledok |
-| --- | --- | --- |
-| **Callback** | Bez registrácie (`NULL`) automat beží a nič nevolá. Po registrácii Init oznámi spoločnú červenú, každá zmena fázy (časová aj vyvolaná príkazom) zavolá callback práve raz a simulovaný ovládač GPIO zobrazuje vždy aktuálnu fázu. | prešla |
-| **F1 – Časovanie Demo** | 1 s štartovacej červenej, dva celé cykly A → B → C → P, presné časy všetkých zmien podľa tabuľky (žiadna fáza nezačne skôr). Pri volaní `Update` s oneskorením (krok 7 ms) trvá žltá celé 2 s a spoločná červená celú 1 s. | prešla |
-| **F2 – Kolízie** | Pri zelenej A: `SET B GREEN` aj `SET P GREEN` → `ERR CONFLICT`. Pri zelenej P: `SET C GREEN` → `ERR CONFLICT`. Zamietnutie počas žltej aj počas spoločnej červenej, prijatie po uplynutí intervalu. `SET P YELLOW` a žltá pre červený semafor → `ERR STATE`, `SET` v Demo → `ERR MODE`. | prešla |
-| **F3 – Prepnutie režimu** | `MODE CONTROL` počas zelenej A: celá žltá 2 s a spoločná červená 1 s, potom Control čaká (`READY=1`). Počas prepínania `SET P GREEN` a návrat do Demo → `ERR BUSY`, opakovaný cieľ → `OK`. `MODE DEMO` počas zelenej P: spoločná červená 1 s, Demo začne fázou A. Prepnutie po uplynutí spoločnej červenej prebehne ihneď. Pretečenie času `uint32_t`. | prešla |
-
-Výsledok: **131 815 kontrol, 0 chýb**.
-
-Na hotovom modeli sa skúšky zopakujú s ovládačom GPIO a modulom USART (časovanie F1 stopkami, F2 a F3 príkazmi z terminálu).
+- `traffic_phase.h` a `TrafficGpio_Apply(TrafficPhase)` patria k pôvodnému návrhu s jednou fázou. Automat ich už nepoužíva. `traffic_fsm.h` zatiaľ `traffic_phase.h` includuje, lebo ho cez neho potrebuje `traffic_gpio.h`. Po odstránení starého rozhrania z ovládača sa môže zmazať.
+- `TrafficSignals` (automat) a `TrafficGpioOutputs` (ovládač) majú rovnaké položky. `main.c` ich prevádza v `apply_signals`. Ak sa dohodneme na jednom spoločnom type, prevod odpadne.

@@ -1,90 +1,64 @@
+Vysledky skusok F1-F3 stavoveho automatu (tests/test_traffic_fsm.c, make)
+Simulovany cas, krok hlavnej slucky 1 ms. Zapisuje sa kazda zmena svetiel.
+Farby: G = zelena, Y = zlta, r = cervena; sipky ON/off.
 
-Callback pre zmenu fazy (oddelenie automatu od GPIO)
-  zmien fazy: 12, volani callbacku: 13 (vratane Init)
+F1a - volny vjazd C: A -> B -> A
+  t=     0 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  1000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+  t=  6000 ms  A=Y A_S=off B_R=Y B_D=r C=r C_S=off P=r
+  t=  8000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  9000 ms  A=r A_S=off B_R=G B_D=G C=r C_S=off P=r
+  t= 14000 ms  A=r A_S=off B_R=Y B_D=Y C=r C_S=off P=r
+  t= 16000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 17000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+F1b - obsadeny vjazd C: A -> C dolava -> B s C_S -> A
+  t=     0 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  1000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+  t=  6000 ms  A=Y A_S=off B_R=Y B_D=r C=r C_S=off P=r
+  t=  8000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  9000 ms  A=r A_S=ON  B_R=r B_D=r C=G C_S=off P=r
+  t= 14000 ms  A=r A_S=off B_R=r B_D=r C=Y C_S=off P=r
+  t= 16000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 17000 ms  A=r A_S=off B_R=G B_D=G C=r C_S=ON  P=r
+  t= 22000 ms  A=r A_S=off B_R=Y B_D=Y C=r C_S=off P=r
+  t= 24000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 25000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+F1c - auto odide pocas C dolava, faza s C_S aj tak prebehne
+F1d - auto pride az pocas B, vyhodnoti sa po dalsej faze A
+F2a - tlacidlo pocas zelenej A: P az po zltej a spolocnej cervenej
+  t=     0 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  1000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+  t=  6000 ms  A=Y A_S=off B_R=Y B_D=r C=r C_S=off P=r
+  t=  8000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  9000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=G
+  t= 14000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 15000 ms  A=r A_S=off B_R=G B_D=G C=r C_S=off P=r
+F2b - pri obsadenom C ostane po chodcoch naplanovane C dolava
+F2c - kolizie v Control
+F2d - spolocna skuska bod 3: A_S, ERR CONFLICT pre B_D, potom B_D
+F2e - SET B zapne oba B, SET B_R RED ukonci celu fazu
+F2f - chodci v Control: tlacidlo -> P_REQ, SET P GREEN ho vybavi
+F2g - neplatne parametre
+F3a - pocas B s C_S stlacit tlacidlo a prepnut do Control
+  t=     0 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  1000 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+  t=  6000 ms  A=Y A_S=off B_R=Y B_D=r C=r C_S=off P=r
+  t=  8000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t=  9000 ms  A=r A_S=ON  B_R=r B_D=r C=G C_S=off P=r
+  t= 14000 ms  A=r A_S=off B_R=r B_D=r C=Y C_S=off P=r
+  t= 16000 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 17000 ms  A=r A_S=off B_R=G B_D=G C=r C_S=ON  P=r
+  t= 18001 ms  A=r A_S=off B_R=Y B_D=Y C=r C_S=off P=r
+  t= 20001 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 31001 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=G
+  t= 33001 ms  A=r A_S=off B_R=r B_D=r C=r C_S=off P=r
+  t= 34001 ms  A=G A_S=off B_R=G B_D=r C=r C_S=off P=r
+F3b - prepnutie pri uz uplynutej ochrannej sekunde je okamzite
+F3c - zmena rezimu pocas cestnej zelenej v Control (cez zltu)
+F3d - cakajuca poziadavka chodcov sa prenesie do Demo
+Pretecenie milisekundoveho casu (uint32_t)
+Automat bez callbacku (NULL)
+Nahodna simulacia 2 hodiny (vstupy aj prikazy), kontrola pravidiel pri kazdej zmene
+  zmien svetiel: 1308, zapnutych zelenych: 487
 
-F1 - casovanie Demo (2 cykly, krok 1 ms)
-  t= 1000 ms  -> A_GREEN
-  t= 6000 ms  -> A_YELLOW
-  t= 8000 ms  -> ALL_RED
-  t= 9000 ms  -> B_GREEN
-  t=14000 ms  -> B_YELLOW
-  t=16000 ms  -> ALL_RED
-  t=17000 ms  -> C_GREEN
-  t=22000 ms  -> C_YELLOW
-  t=24000 ms  -> ALL_RED
-  t=25000 ms  -> P_GREEN
-  t=30000 ms  -> ALL_RED
-  t=31000 ms  -> A_GREEN
-  t=36000 ms  -> A_YELLOW
-  t=38000 ms  -> ALL_RED
-  t=39000 ms  -> B_GREEN
-  t=44000 ms  -> B_YELLOW
-  t=46000 ms  -> ALL_RED
-  t=47000 ms  -> C_GREEN
-  t=52000 ms  -> C_YELLOW
-  t=54000 ms  -> ALL_RED
-  t=55000 ms  -> P_GREEN
-  t=60000 ms  -> ALL_RED
-
-F1b - oneskorene volanie Update (krok 7 ms): zlta a spolocna cervena dostanu cely interval
-  zelena A skoncila v case 6006 ms (oneskorenie 6 ms)
-  zlta trvala 2000 ms, spolocna cervena 1000 ms
-
-F2 - kolizie v rezime Control
-  t=    0 ms  SET A GREEN      -> ERR MODE
-  t=    0 ms  MODE CONTROL     -> OK
-  t= 1000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
-  t= 1000 ms  SET A GREEN      -> OK
-  t= 3000 ms  SET B GREEN      -> ERR CONFLICT
-  t= 3000 ms  SET P GREEN      -> ERR CONFLICT
-  t= 3000 ms  SET A GREEN      -> OK
-  t= 3000 ms  SET A RED        -> OK
-  t= 4000 ms  SET B GREEN      -> ERR CONFLICT
-  t= 4000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=0 A=Y B=R C=R P=R
-  t= 5000 ms  -> ALL_RED
-  t= 5500 ms  SET B GREEN      -> ERR CONFLICT
-  t= 6000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
-  t= 6000 ms  SET P GREEN      -> OK
-  t= 6000 ms  SET C GREEN      -> ERR CONFLICT
-  t= 6000 ms  SET P YELLOW     -> ERR STATE
-  t= 6000 ms  SET B YELLOW     -> ERR STATE
-  t= 6000 ms  SET B RED        -> OK
-  t= 6000 ms  SET P RED        -> OK
-  t= 6000 ms  SET C GREEN      -> ERR CONFLICT
-  t= 7000 ms  SET C GREEN      -> OK
-  t=60000 ms  SET C YELLOW     -> OK
-  t=60000 ms  SET C RED        -> OK
-  t=62000 ms  -> ALL_RED
-  t=63000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
-
-F3 - prepnutie rezimu pocas cestnej zelenej a pocas zelenej pre chodcov
-  t= 1000 ms  -> A_GREEN
-  t= 3000 ms  MODE CONTROL     -> OK
-  t= 3000 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=Y B=R C=R P=R
-  t= 3000 ms  SET P GREEN      -> ERR BUSY
-  t= 3000 ms  MODE DEMO        -> ERR BUSY
-  t= 3000 ms  MODE CONTROL     -> OK
-  t= 5000 ms  -> ALL_RED
-  t= 5000 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=R B=R C=R P=R
-  t= 6000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
-  t=20000 ms  SET P GREEN      -> OK
-  t=22000 ms  MODE DEMO        -> OK
-  t=22000 ms  STATUS           -> MODE=CONTROL NEXT=DEMO READY=0 A=R B=R C=R P=R
-  t=23000 ms  -> A_GREEN
-  t=23000 ms  STATUS           -> MODE=DEMO NEXT=- READY=0 A=G B=R C=R P=R
-  t=23000 ms  MODE DEMO        -> OK
-  t=28000 ms  -> A_YELLOW
-
-F3b - prepnutie po uplynuti spolocnej cervenej prebehne ihned
-  t=30000 ms  -> ALL_RED
-  t=30500 ms  MODE CONTROL     -> OK
-  t=30500 ms  STATUS           -> MODE=DEMO NEXT=CONTROL READY=0 A=R B=R C=R P=R
-  t=31000 ms  STATUS           -> MODE=CONTROL NEXT=- READY=1 A=R B=R C=R P=R
-  t=31000 ms  MODE CONTROL     -> OK
-  t=31000 ms  MODE DEMO        -> OK
-  t=31000 ms  STATUS           -> MODE=DEMO NEXT=- READY=0 A=G B=R C=R P=R
-
-F3c - pretecenie milisekundoveho casu (uint32_t)
-  t=    0 ms  -> A_GREEN
-
-131815 kontrol, 0 chyb -> VSETKY TESTY PRESLI
+10858 kontrol, 0 chyb -> VSETKY TESTY PRESLI
