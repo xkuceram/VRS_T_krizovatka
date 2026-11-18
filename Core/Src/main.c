@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "traffic_gpio.h"
 #include "traffic_fsm.h"
+#include "traffic_inputs.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,6 +92,7 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   TrafficGpio_Init();
+  TrafficInputs_Init(HAL_GetTick());
   TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   /* registracia pred spustenim automatu */
   TrafficFsm_Init(HAL_GetTick());
   /* USER CODE END 2 */
@@ -102,8 +104,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* stavovy automat vyhodnoti casovanie, zmenu fazy oznami GPIO cez callback */
-    TrafficFsm_Update(HAL_GetTick());
+
+  const uint32_t now_ms = HAL_GetTick();
+  TrafficInputs_Update(now_ms);
+  TrafficFsm_Update(now_ms);
   }
   /* USER CODE END 3 */
 }
