@@ -17,6 +17,7 @@ During the project demonstration, we will run the Demo cycle with approach C bot
 <sub>traffic-fsm · model-gpio · usart-control</sub>
 
 - [Project scope](#project-scope)
+  - [Automatic control (DEMO)](#automatic-control-demo)
 - [System overview](#system-overview)
 - [Serial protocol](#serial-protocol)
 - [Required hardware](#required-hardware)
@@ -82,7 +83,7 @@ A car that only passes the sensor on C does not trigger phase C. The controller 
 
 A single IR sensor at the stop line on C monitors the shared approach lane. We will check its detection range with a stationary car and with a car passing in the adjacent exit lane. <sub>· model-gpio</sub>
 
-### Demo mode
+### Automatic control (DEMO)
 
 In the table, **1** means green or an illuminated arrow. **0** means red or an arrow that is off. Yellow is used during the transition between phases. <sub>· traffic-fsm</sub>
 
