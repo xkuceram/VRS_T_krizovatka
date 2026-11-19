@@ -58,6 +58,22 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* Automat oznami zmenu svetiel, ovladac GPIO ich nastavi na pinoch */
+static void apply_signals(const TrafficSignals *signals)
+{
+  const TrafficGpioOutputs outputs =
+  {
+    .a = signals->a,
+    .b_r = signals->b_r,
+    .b_d = signals->b_d,
+    .c = signals->c,
+    .p = signals->p,
+    .a_s_on = signals->a_s_on,
+    .c_s_on = signals->c_s_on
+  };
+  TrafficGpio_ApplyOutputs(&outputs);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -93,7 +109,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   TrafficGpio_Init();
   TrafficInputs_Init(HAL_GetTick());
-  TrafficFsm_RegisterPhaseCallback(TrafficGpio_Apply);   /* registracia pred spustenim automatu */
+  TrafficFsm_RegisterOutputCallback(apply_signals);   /* registracia pred spustenim automatu */
   TrafficFsm_Init(HAL_GetTick());
   /* USER CODE END 2 */
 
@@ -104,10 +120,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-  const uint32_t now_ms = HAL_GetTick();
-  TrafficInputs_Update(now_ms);
-  TrafficFsm_Update(now_ms);
+    const uint32_t now_ms = HAL_GetTick();
+    TrafficInputs_Update(now_ms);
+    TrafficFsm_Update(now_ms, TrafficInputs_IsCarPresent(), TrafficInputs_TakePedestrianPress());
   }
   /* USER CODE END 3 */
 }

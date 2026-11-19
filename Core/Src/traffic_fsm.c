@@ -1,352 +1,582 @@
 #include "traffic_fsm.h"
+#include <stddef.h>
 
-/*
- * Stavovy automat T-krizovatky (tabulka stavov a prechodov je v docs/traffic_fsm.md).
+/* ---------------------------------------------------------------------------
+ * Signaly a konfliktna matica
  *
- * Stav automatu tvori:
- *   - aktivny rezim (Demo / Control) a pripadny cielovy rezim pocas prepinania,
- *   - aktualna faza (TrafficPhase) a cas vstupu do nej,
- *   - v rezime Demo index kroku v cykle.
- *
- * Cas fazy sa meria od skutocneho vstupu do fazy, takze zlta aj spolocna cervena
- * dostanu vzdy cely interval, aj ked predchadzajuca faza skoncila s oneskorenim.
- * Rozdiel casov (uint32_t) funguje spravne aj pri preteceni milisekundoveho casu.
- */
+ * Kazdy zo siedmich signalov ma vlastny stav (cervena, zelena, zlta).
+ * Novy signal sa zapne, ked vsetky signaly, s ktorymi je v konflikte,
+ * svietia nacerveno aspon TRAFFIC_ALL_RED_MS. Bezpecnost krizovatky preto
+ * vyplyva priamo z matice nizsie.
+ * ------------------------------------------------------------------------- */
 
-/* Jeden krok cyklu Demo */
-typedef struct
+enum
 {
-    TrafficPhase phase;
-    uint32_t duration_ms;
-} DemoStep;
-
-/* Cyklus Demo podla tabulky v README (11 krokov, spolu 30 s) */
-static const DemoStep demo_cycle[] =
-{
-    {TRAFFIC_PHASE_A_GREEN,  TRAFFIC_GREEN_MS},     /*  1 */
-    {TRAFFIC_PHASE_A_YELLOW, TRAFFIC_YELLOW_MS},    /*  2 */
-    {TRAFFIC_PHASE_ALL_RED,  TRAFFIC_ALL_RED_MS},   /*  3 */
-    {TRAFFIC_PHASE_B_GREEN,  TRAFFIC_GREEN_MS},     /*  4 */
-    {TRAFFIC_PHASE_B_YELLOW, TRAFFIC_YELLOW_MS},    /*  5 */
-    {TRAFFIC_PHASE_ALL_RED,  TRAFFIC_ALL_RED_MS},   /*  6 */
-    {TRAFFIC_PHASE_C_GREEN,  TRAFFIC_GREEN_MS},     /*  7 */
-    {TRAFFIC_PHASE_C_YELLOW, TRAFFIC_YELLOW_MS},    /*  8 */
-    {TRAFFIC_PHASE_ALL_RED,  TRAFFIC_ALL_RED_MS},   /*  9 */
-    {TRAFFIC_PHASE_P_GREEN,  TRAFFIC_GREEN_MS},     /* 10 */
-    {TRAFFIC_PHASE_ALL_RED,  TRAFFIC_ALL_RED_MS}    /* 11 */
+    S_A = 0,        /* zlava: rovno aj dole */
+    S_AS,           /* sipka A_S: z A dole (pri cervenej na A) */
+    S_BR,           /* sprava rovno */
+    S_BD,           /* sprava dole */
+    S_C,            /* zdola: dolava aj doprava */
+    S_CS,           /* sipka C_S: z C doprava (pri cervenej na C) */
+    S_P,            /* chodci */
+    S_COUNT
 };
 
-#define DEMO_STEP_COUNT     (sizeof(demo_cycle) / sizeof(demo_cycle[0]))
-#define DEMO_LAST_STEP      (DEMO_STEP_COUNT - 1U)  /* spolocna cervena pred krokom 1 */
+#define BIT(s)      ((uint8_t)(1U << (s)))
+#define M_A         BIT(S_A)
+#define M_AS        BIT(S_AS)
+#define M_BR        BIT(S_BR)
+#define M_BD        BIT(S_BD)
+#define M_C         BIT(S_C)
+#define M_CS        BIT(S_CS)
+#define M_P         BIT(S_P)
+#define M_ALL       ((uint8_t)(BIT(S_COUNT) - 1U))
+#define M_ROAD      (M_A | M_BR | M_BD | M_C)   /* bezne cestne semafory - koncia zltou */
 
-/* Stav automatu */
-static TrafficMode active_mode = TRAFFIC_MODE_DEMO;
-static TrafficMode next_mode = TRAFFIC_MODE_NONE;
-static TrafficPhase phase = TRAFFIC_PHASE_ALL_RED;
-static uint32_t phase_start_ms = 0;
-static uint32_t demo_step = DEMO_LAST_STEP;
-
-/* Callback pre zmenu fazy (aplikacna vrstva -> ovladac GPIO) */
-static TrafficPhaseCallback phase_callback = 0;
-
-
-/* ---------------------------------------------------------------------------- */
-/* Pomocne funkcie                                                              */
-/* ---------------------------------------------------------------------------- */
-
-/* Oznamenie fazy registrovanej funkcii - kontrola, ci je callback zaregistrovany */
-static void notify_phase(void)
+/*
+ * Konfliktna matica: s cim sa pohyb krizuje alebo zlieva do jedneho pruhu.
+ *   A   (rovno aj dole)   x B_D (krizuje), C (krizuje / zlieva), C_S (zlieva), P (odbocenie dole)
+ *   A_S (z A dole)        x B_D (rovnaky vyjazdovy pruh), P
+ *   B_R (rovno dolava)    x C (zlievanie pri odboceni z C dolava)
+ *   B_D (dole)            x A, A_S, C, P
+ *   C   (dolava aj doprava) x A, B_R, B_D, P
+ *   C_S (doprava)         x A, P
+ *   P   (priechod cez dolnu vetvu) x A, A_S, B_D, C, C_S
+ */
+static const uint8_t conflicts[S_COUNT] =
 {
-    if (phase_callback != 0)
+    [S_A]  = M_BD | M_C | M_CS | M_P,
+    [S_AS] = M_BD | M_P,
+    [S_BR] = M_C,
+    [S_BD] = M_A | M_AS | M_C | M_P,
+    [S_C]  = M_A | M_BR | M_BD | M_P,
+    [S_CS] = M_A | M_P,
+    [S_P]  = M_A | M_AS | M_BD | M_C | M_CS
+};
+
+/* Sipka svieti iba pri cervenej na svojom beznom semafore (ten isty pohyb,
+ * preto bez ochranneho casu - sipka moze naskocit hned po zltej). */
+static const uint8_t partner[S_COUNT] =
+{
+    [S_A] = M_AS, [S_AS] = M_A,
+    [S_C] = M_CS, [S_CS] = M_C
+};
+
+/* Fazy rezimu Demo */
+typedef enum
+{
+    PH_NONE = 0,
+    PH_F1,          /* hlavna cesta: A + B_R */
+    PH_F2,          /* vjazd C: C (oba smery) + A_S */
+    PH_F3,          /* B + sipka C doprava: B_R + B_D + C_S */
+    PH_F4           /* chodci + B rovno: P + B_R */
+} Phase;
+
+static const uint8_t phase_mask[] =
+{
+    [PH_NONE] = 0U,
+    [PH_F1] = M_A | M_BR,
+    [PH_F2] = M_C | M_AS,
+    [PH_F3] = M_BR | M_BD | M_CS,
+    [PH_F4] = M_BR | M_P
+};
+
+/* Ciel prikazu SET -> signaly */
+static const uint8_t target_mask[TRAFFIC_TARGET_COUNT] =
+{
+    [TRAFFIC_TARGET_A]   = M_A,
+    [TRAFFIC_TARGET_A_S] = M_AS,
+    [TRAFFIC_TARGET_B_R] = M_BR,
+    [TRAFFIC_TARGET_B_D] = M_BD,
+    [TRAFFIC_TARGET_C]   = M_C,
+    [TRAFFIC_TARGET_C_S] = M_CS,
+    [TRAFFIC_TARGET_P]   = M_P,
+    [TRAFFIC_TARGET_B]   = M_BR | M_BD
+};
+
+/* ---------------------------------------------------------------------------
+ * Stav automatu
+ * ------------------------------------------------------------------------- */
+
+typedef enum
+{
+    SIG_RED = 0,    /* cervena alebo zhasnuta sipka */
+    SIG_GREEN,      /* zelena alebo svietiaca sipka */
+    SIG_YELLOW      /* zlta (iba bezne cestne semafory) */
+} SigState;
+
+typedef struct
+{
+    TrafficMode mode;
+    TrafficMode next_mode;
+    uint32_t now_ms;                /* cas posledneho Update (pouzivaju aj poziadavky) */
+
+    SigState sig[S_COUNT];
+    uint32_t since[S_COUNT];        /* cas poslednej zmeny signalu */
+
+    /* rezim Demo */
+    Phase phase;                    /* aktualna (alebo nabiehajuca) faza */
+    Phase before_ped;               /* faza pred chodcami (F1 alebo F3) */
+    uint8_t target;                 /* signaly faze, ktore sa maju zapnut */
+    bool phase_on;                  /* vsetky signaly faze uz svietia */
+    uint32_t phase_start_ms;        /* odkedy svietia vsetky signaly faze */
+
+    /* vstupy a poziadavky */
+    bool car_c;
+    bool car_waiting;               /* auto stoji pred snimacom pri nezelenej C */
+    uint32_t car_since_ms;
+    bool c_req;
+    bool p_req;
+} FsmState;
+
+static FsmState fsm;
+static TrafficOutputCallback output_callback = NULL;
+static TrafficSignals shown;        /* posledny oznameny stav svetiel */
+static bool shown_valid = false;
+
+/* ---------------------------------------------------------------------------
+ * Pomocne funkcie pre signaly
+ * ------------------------------------------------------------------------- */
+
+static uint32_t elapsed(uint32_t since_ms)
+{
+    return (uint32_t)(fsm.now_ms - since_ms);   /* funguje aj pri preteceni */
+}
+
+/* Signaly, ktore nesvietia nacerveno (zelene aj zlte) */
+static uint8_t lit_mask(void)
+{
+    uint8_t m = 0U;
+    for (int s = 0; s < S_COUNT; s++)
     {
-        phase_callback(phase);
+        if (fsm.sig[s] != SIG_RED)
+        {
+            m |= BIT(s);
+        }
+    }
+    return m;
+}
+
+static uint8_t green_mask(void)
+{
+    uint8_t m = 0U;
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        if (fsm.sig[s] == SIG_GREEN)
+        {
+            m |= BIT(s);
+        }
+    }
+    return m;
+}
+
+/* Vsetky signaly v maske su cervene aspon ochranny cas */
+static bool cleared(uint8_t mask)
+{
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        if ((mask & BIT(s)) != 0U &&
+            (fsm.sig[s] != SIG_RED || elapsed(fsm.since[s]) < TRAFFIC_ALL_RED_MS))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Smie sa signal zapnut? Sam aj konfliktne signaly cervene aspon 1 s, partner (A/A_S, C/C_S) cerveny. */
+static bool can_start(int s)
+{
+    return cleared((uint8_t)(BIT(s) | conflicts[s])) &&
+           (lit_mask() & partner[s]) == 0U;
+}
+
+static void set_signal(int s, SigState state)
+{
+    fsm.sig[s] = state;
+    fsm.since[s] = fsm.now_ms;
+    if (state == SIG_GREEN)
+    {
+        if (s == S_P)
+        {
+            fsm.p_req = false;      /* poziadavka chodcov je vybavena */
+        }
+        if (s == S_C)
+        {
+            fsm.c_req = false;      /* poziadavka z vjazdu C je vybavena */
+            fsm.car_waiting = false;
+        }
     }
 }
 
-static void enter_phase(TrafficPhase new_phase, uint32_t now_ms)
+/* Ukonci signal: bezny cestny semafor cez zltu, sipka a chodci hned */
+static void end_signal(int s)
 {
-    uint8_t changed = (uint8_t)(new_phase != phase);
-
-    phase = new_phase;
-    phase_start_ms = now_ms;
-
-    if (changed)
+    if (fsm.sig[s] != SIG_GREEN)
     {
-        notify_phase();
+        return;
+    }
+    set_signal(s, ((M_ROAD & BIT(s)) != 0U) ? SIG_YELLOW : SIG_RED);
+}
+
+static void end_signals(uint8_t mask)
+{
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        if ((mask & BIT(s)) != 0U)
+        {
+            end_signal(s);
+        }
     }
 }
 
-static uint32_t phase_elapsed(uint32_t now_ms)
+/* Vsetko cervene aspon ochranny cas */
+static bool all_clear(void)
 {
-    return now_ms - phase_start_ms;
+    return cleared(M_ALL);
 }
 
-static uint8_t is_road_green(TrafficPhase p)
-{
-    return (p == TRAFFIC_PHASE_A_GREEN) || (p == TRAFFIC_PHASE_B_GREEN) || (p == TRAFFIC_PHASE_C_GREEN);
-}
+/* ---------------------------------------------------------------------------
+ * Vystup
+ * ------------------------------------------------------------------------- */
 
-static uint8_t is_road_yellow(TrafficPhase p)
+static TrafficColor color_of(int s)
 {
-    return (p == TRAFFIC_PHASE_A_YELLOW) || (p == TRAFFIC_PHASE_B_YELLOW) || (p == TRAFFIC_PHASE_C_YELLOW);
-}
-
-/* Zelena cestna faza -> nasledujuca zlta faza toho isteho semaforu */
-static TrafficPhase yellow_after(TrafficPhase green)
-{
-    switch (green)
+    switch (fsm.sig[s])
     {
-        case TRAFFIC_PHASE_A_GREEN: return TRAFFIC_PHASE_A_YELLOW;
-        case TRAFFIC_PHASE_B_GREEN: return TRAFFIC_PHASE_B_YELLOW;
-        case TRAFFIC_PHASE_C_GREEN: return TRAFFIC_PHASE_C_YELLOW;
-        default:                    return TRAFFIC_PHASE_ALL_RED;
+        case SIG_GREEN:  return TRAFFIC_COLOR_GREEN;
+        case SIG_YELLOW: return TRAFFIC_COLOR_YELLOW;
+        default:         return TRAFFIC_COLOR_RED;
     }
 }
 
-/* Zelena faza zvoleneho semaforu */
-static TrafficPhase green_phase_of(TrafficLight light)
+static TrafficSignals current_signals(void)
 {
-    switch (light)
+    TrafficSignals s =
     {
-        case TRAFFIC_LIGHT_A: return TRAFFIC_PHASE_A_GREEN;
-        case TRAFFIC_LIGHT_B: return TRAFFIC_PHASE_B_GREEN;
-        case TRAFFIC_LIGHT_C: return TRAFFIC_PHASE_C_GREEN;
-        default:              return TRAFFIC_PHASE_P_GREEN;
+        .a = color_of(S_A),
+        .b_r = color_of(S_BR),
+        .b_d = color_of(S_BD),
+        .c = color_of(S_C),
+        .p = color_of(S_P),
+        .a_s_on = fsm.sig[S_AS] == SIG_GREEN,
+        .c_s_on = fsm.sig[S_CS] == SIG_GREEN
+    };
+    return s;
+}
+
+static bool signals_equal(const TrafficSignals *x, const TrafficSignals *y)
+{
+    return x->a == y->a && x->b_r == y->b_r && x->b_d == y->b_d && x->c == y->c &&
+           x->p == y->p && x->a_s_on == y->a_s_on && x->c_s_on == y->c_s_on;
+}
+
+/* Oznami zmenu svetiel cez callback (iba pri skutocnej zmene) */
+static void publish(void)
+{
+    const TrafficSignals s = current_signals();
+
+    if (shown_valid && signals_equal(&s, &shown))
+    {
+        return;
+    }
+    shown = s;
+    shown_valid = true;
+    if (output_callback != NULL)
+    {
+        output_callback(&shown);
     }
 }
 
-/* Ochranny interval spolocnej cervenej uplynul */
-static uint8_t all_red_guard_done(uint32_t now_ms)
-{
-    return (phase == TRAFFIC_PHASE_ALL_RED) && (phase_elapsed(now_ms) >= TRAFFIC_ALL_RED_MS);
-}
+/* ---------------------------------------------------------------------------
+ * Rezim Demo
+ * ------------------------------------------------------------------------- */
 
-/* Aktivacia cieloveho rezimu (vola sa az po uplynuti spolocnej cervenej) */
-static void activate_next_mode(uint32_t now_ms)
+/*
+ * Zmena fazy: signaly, ktore pokracuju aj v novej faze, svietia dalej.
+ * Ostatne skoncia (zlta alebo hned). Nove signaly nabiehaju v step(),
+ * ked to dovoli konfliktna matica.
+ */
+static void start_phase(Phase phase)
 {
-    active_mode = next_mode;
-    next_mode = TRAFFIC_MODE_NONE;
+    const uint8_t mask = phase_mask[phase];
 
-    if (active_mode == TRAFFIC_MODE_DEMO)
-    {
-        /* Demo zacina fazou A (krok 1) */
-        demo_step = 0U;
-        enter_phase(demo_cycle[0].phase, now_ms);
-    }
-    /* Control: semafory zostanu na spolocnej cervenej a automat caka na prikaz */
+    end_signals((uint8_t)(green_mask() & (uint8_t)~mask));
+    fsm.phase = phase;
+    fsm.target = mask;
+    fsm.phase_on = false;
 }
 
 /*
- * Ukoncenie aktualnej fazy pri poziadavke na zmenu rezimu:
- * cestna zelena -> zlta, zelena pre chodcov -> spolocna cervena,
- * zlta a spolocna cervena dobehnu.
+ * Poradie faz:  F1 -> [F4 ak caka chodec] -> [F2 ak caka auto na C] -> F3 -> [F4] -> F1
+ * B_R svieti v F1, F3 aj F4, preto pri prechode medzi nimi nezastavi.
  */
-static void start_phase_termination(uint32_t now_ms)
+static Phase demo_next_phase(void)
 {
-    if (is_road_green(phase))
+    switch (fsm.phase)
     {
-        enter_phase(yellow_after(phase), now_ms);
-    }
-    else if (phase == TRAFFIC_PHASE_P_GREEN)
-    {
-        enter_phase(TRAFFIC_PHASE_ALL_RED, now_ms);
+        case PH_F1:
+            if (fsm.p_req)
+            {
+                fsm.before_ped = PH_F1;
+                return PH_F4;
+            }
+            return fsm.c_req ? PH_F2 : PH_F3;
+
+        case PH_F4:
+            if (fsm.before_ped == PH_F1)
+            {
+                return fsm.c_req ? PH_F2 : PH_F3;
+            }
+            return PH_F1;
+
+        case PH_F2:
+            return PH_F3;
+
+        case PH_F3:
+            if (fsm.p_req)
+            {
+                fsm.before_ped = PH_F3;
+                return PH_F4;
+            }
+            return PH_F1;
+
+        case PH_NONE:
+        default:
+            return PH_F1;
     }
 }
 
-
-/* ---------------------------------------------------------------------------- */
-/* Verejne funkcie                                                              */
-/* ---------------------------------------------------------------------------- */
-
-void TrafficFsm_RegisterPhaseCallback(TrafficPhaseCallback callback)
+static void demo_step(void)
 {
-    phase_callback = callback;
+    /* zapnut signaly fazy, ktore uz smu naskocit */
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        if ((fsm.target & BIT(s)) != 0U && fsm.sig[s] == SIG_RED && can_start(s))
+        {
+            set_signal(s, SIG_GREEN);
+        }
+    }
+
+    if (!fsm.phase_on)
+    {
+        if ((green_mask() & fsm.target) == fsm.target)
+        {
+            fsm.phase_on = true;
+            fsm.phase_start_ms = fsm.now_ms;
+        }
+    }
+    else if (elapsed(fsm.phase_start_ms) >= TRAFFIC_GREEN_MS)
+    {
+        start_phase(demo_next_phase());
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Jeden krok automatu v case fsm.now_ms
+ * ------------------------------------------------------------------------- */
+
+static void step(void)
+{
+    /* zlta dobehne a prejde na cervenu */
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        if (fsm.sig[s] == SIG_YELLOW && elapsed(fsm.since[s]) >= TRAFFIC_YELLOW_MS)
+        {
+            set_signal(s, SIG_RED);
+        }
+    }
+
+    /* dokoncenie prepnutia rezimu: vsetko cervene aspon ochranny cas */
+    if (fsm.next_mode != TRAFFIC_MODE_NONE && all_clear())
+    {
+        fsm.mode = fsm.next_mode;
+        fsm.next_mode = TRAFFIC_MODE_NONE;
+        if (fsm.mode == TRAFFIC_MODE_DEMO)
+        {
+            fsm.phase = PH_NONE;
+            start_phase(PH_F1);     /* po navrate do Demo zacne fazou F1 */
+        }
+    }
+
+    if (fsm.mode == TRAFFIC_MODE_DEMO && fsm.next_mode == TRAFFIC_MODE_NONE)
+    {
+        demo_step();
+    }
+
+    publish();
+}
+
+/* Poziadavka z vjazdu C: auto musi stat pred snimacom aspon TRAFFIC_CAR_WAIT_MS */
+static void update_car_request(bool car_c)
+{
+    if (!car_c)
+    {
+        if (fsm.c_req && fsm.sig[S_CS] == SIG_GREEN)
+        {
+            fsm.c_req = false;      /* auto odbocilo doprava po sipke */
+        }
+        fsm.car_waiting = false;
+    }
+    else if (fsm.sig[S_C] == SIG_GREEN)
+    {
+        fsm.car_waiting = false;    /* pri zelenej na C auta prechadzaju */
+    }
+    else if (!fsm.car_waiting)
+    {
+        fsm.car_waiting = true;
+        fsm.car_since_ms = fsm.now_ms;
+    }
+    else if (elapsed(fsm.car_since_ms) >= TRAFFIC_CAR_WAIT_MS)
+    {
+        fsm.c_req = true;
+    }
+    fsm.car_c = car_c;
+}
+
+/* ---------------------------------------------------------------------------
+ * Verejne funkcie
+ * ------------------------------------------------------------------------- */
+
+void TrafficFsm_RegisterOutputCallback(TrafficOutputCallback callback)
+{
+    output_callback = callback;
 }
 
 void TrafficFsm_Init(uint32_t now_ms)
 {
-    /* po inicializacii spolocna cervena, Demo zacne prvou zelenou az po 1 s */
-    active_mode = TRAFFIC_MODE_DEMO;
-    next_mode = TRAFFIC_MODE_NONE;
-    demo_step = DEMO_LAST_STEP;
-    phase = TRAFFIC_PHASE_ALL_RED;
-    phase_start_ms = now_ms;
-    notify_phase();                     /* pociatocny stav sa oznami vzdy */
+    fsm = (FsmState){
+        .mode = TRAFFIC_MODE_DEMO,
+        .next_mode = TRAFFIC_MODE_NONE,
+        .now_ms = now_ms,
+        .phase = PH_NONE,
+        .before_ped = PH_F1
+    };
+    for (int s = 0; s < S_COUNT; s++)
+    {
+        fsm.sig[s] = SIG_RED;
+        fsm.since[s] = now_ms;      /* prva zelena az po 1 s spolocnej cervenej */
+    }
+    start_phase(PH_F1);
+    shown_valid = false;
+    publish();                      /* spolocna cervena po inicializacii */
 }
 
-TrafficPhase TrafficFsm_Update(uint32_t now_ms)
+void TrafficFsm_Update(uint32_t now_ms, bool car_c, bool ped_pressed)
 {
-    uint32_t elapsed = phase_elapsed(now_ms);
+    fsm.now_ms = now_ms;
 
-    if (next_mode != TRAFFIC_MODE_NONE)
+    /* stlacenie pocas zelenej pre chodcov patri do prebiehajucej fazy */
+    if (ped_pressed && fsm.sig[S_P] != SIG_GREEN)
     {
-        /* prebieha prepinanie rezimu: zlta -> spolocna cervena -> cielovy rezim */
-        if (is_road_yellow(phase) && elapsed >= TRAFFIC_YELLOW_MS)
-        {
-            enter_phase(TRAFFIC_PHASE_ALL_RED, now_ms);
-        }
-        else if (all_red_guard_done(now_ms))
-        {
-            activate_next_mode(now_ms);
-        }
+        fsm.p_req = true;
     }
-    else if (active_mode == TRAFFIC_MODE_DEMO)
-    {
-        /* cyklus Demo - po uplynuti trvania kroku prechod na dalsi krok */
-        if (elapsed >= demo_cycle[demo_step].duration_ms)
-        {
-            demo_step = (demo_step + 1U) % DEMO_STEP_COUNT;
-            enter_phase(demo_cycle[demo_step].phase, now_ms);
-        }
-    }
-    else
-    {
-        /* Control - zlta dobehne automaticky, zelena trva do prikazu */
-        if (is_road_yellow(phase) && elapsed >= TRAFFIC_YELLOW_MS)
-        {
-            enter_phase(TRAFFIC_PHASE_ALL_RED, now_ms);
-        }
-    }
+    update_car_request(car_c);
 
-    return phase;
+    step();
 }
 
-TrafficResult TrafficFsm_RequestMode(TrafficMode mode, uint32_t now_ms)
+TrafficResult TrafficFsm_RequestMode(TrafficMode mode)
 {
     if (mode != TRAFFIC_MODE_DEMO && mode != TRAFFIC_MODE_CONTROL)
     {
         return TRAFFIC_RESULT_ERR_PARAM;
     }
 
-    /* aktualizacia casovania, aby sa poziadavka vyhodnotila voci aktualnej faze */
-    (void)TrafficFsm_Update(now_ms);
-
-    if (next_mode != TRAFFIC_MODE_NONE)
+    if (fsm.next_mode != TRAFFIC_MODE_NONE)
     {
-        /* pocas prepinania: zopakovanie ciela = OK, navrat do opustaneho rezimu = BUSY */
-        return (mode == next_mode) ? TRAFFIC_RESULT_OK : TRAFFIC_RESULT_ERR_BUSY;
+        /* prebieha prepinanie: rovnaky ciel potvrdime, navrat do opustaneho rezimu nie */
+        return (mode == fsm.next_mode) ? TRAFFIC_RESULT_OK : TRAFFIC_RESULT_ERR_BUSY;
     }
 
-    if (mode == active_mode)
+    if (mode == fsm.mode)
     {
-        /* rezim uz je aktivny - len potvrdenie */
-        return TRAFFIC_RESULT_OK;
+        return TRAFFIC_RESULT_OK;   /* ustaleny rezim - potvrdenie */
     }
 
-    /* zaciatok prepinania */
-    next_mode = mode;
-    start_phase_termination(now_ms);
-
-    /* ak spolocna cervena uz uplynula, rezim sa prepne ihned */
-    if (all_red_guard_done(now_ms))
-    {
-        activate_next_mode(now_ms);
-    }
-
+    /* ukoncit vsetky zelene, cielovy rezim sa aktivuje po spolocnej cervenej */
+    fsm.next_mode = mode;
+    end_signals(M_ALL);
+    fsm.phase = PH_NONE;
+    fsm.target = 0U;
+    fsm.phase_on = false;
+    step();                         /* ak uz je vsetko cervene aspon 1 s, prepne hned */
     return TRAFFIC_RESULT_OK;
 }
 
-TrafficResult TrafficFsm_RequestColor(TrafficLight light, TrafficColor color, uint32_t now_ms)
+TrafficResult TrafficFsm_RequestSignal(TrafficTarget target, TrafficColor color)
 {
-    TrafficPhase green;
-
-    if ((unsigned int)light >= (unsigned int)TRAFFIC_LIGHT_COUNT ||
-        (color != TRAFFIC_COLOR_RED && color != TRAFFIC_COLOR_YELLOW && color != TRAFFIC_COLOR_GREEN))
+    if ((unsigned int)target >= (unsigned int)TRAFFIC_TARGET_COUNT ||
+        (unsigned int)color > (unsigned int)TRAFFIC_COLOR_GREEN)
     {
         return TRAFFIC_RESULT_ERR_PARAM;
     }
-
-    (void)TrafficFsm_Update(now_ms);
-
-    /* SET je mozny len v aktivnom rezime Control po dokonceni prepnutia */
-    if (next_mode != TRAFFIC_MODE_NONE)
+    if (fsm.next_mode != TRAFFIC_MODE_NONE)
     {
         return TRAFFIC_RESULT_ERR_BUSY;
     }
-    if (active_mode != TRAFFIC_MODE_CONTROL)
+    if (fsm.mode != TRAFFIC_MODE_CONTROL)
     {
         return TRAFFIC_RESULT_ERR_MODE;
     }
 
-    green = green_phase_of(light);
+    const uint8_t mask = target_mask[target];
+    const uint8_t green = green_mask();
 
     switch (color)
     {
         case TRAFFIC_COLOR_GREEN:
-            if (phase == green)
+            if ((green & mask) == mask)
             {
-                return TRAFFIC_RESULT_OK;                   /* uz svieti nazeleno */
+                return TRAFFIC_RESULT_OK;               /* uz svieti - potvrdenie */
             }
-            if (!all_red_guard_done(now_ms))
+            /* kazdy novy signal musi byt podla matice volny (aj voci zltym) */
+            for (int s = 0; s < S_COUNT; s++)
             {
-                return TRAFFIC_RESULT_ERR_CONFLICT;         /* ina zelena, zlta alebo bezi spolocna cervena */
+                if ((mask & BIT(s)) != 0U && fsm.sig[s] != SIG_GREEN && !can_start(s))
+                {
+                    return TRAFFIC_RESULT_ERR_CONFLICT;
+                }
             }
-            enter_phase(green, now_ms);
-            return TRAFFIC_RESULT_OK;
+            for (int s = 0; s < S_COUNT; s++)
+            {
+                if ((mask & BIT(s)) != 0U && fsm.sig[s] != SIG_GREEN)
+                {
+                    set_signal(s, SIG_GREEN);
+                }
+            }
+            break;
 
         case TRAFFIC_COLOR_YELLOW:
-            if (light == TRAFFIC_LIGHT_P || phase != green)
+            if ((green & mask & M_ROAD) == 0U)
             {
-                return TRAFFIC_RESULT_ERR_STATE;            /* P nema zltu, alebo semafor nema zelenu */
+                return TRAFFIC_RESULT_ERR_STATE;        /* ciel nema zeleny bezny cestny semafor */
             }
-            enter_phase(yellow_after(green), now_ms);
-            return TRAFFIC_RESULT_OK;
+            end_signals(mask);
+            break;
 
         case TRAFFIC_COLOR_RED:
         default:
-            if (phase == green)
-            {
-                /* cestna zelena konci zltou, zelena pre chodcov priamo spolocnou cervenou */
-                enter_phase((light == TRAFFIC_LIGHT_P) ? TRAFFIC_PHASE_ALL_RED : yellow_after(green), now_ms);
-            }
-            /* zlta dobehne sama, cerveny semafor len potvrdi svoj stav */
-            return TRAFFIC_RESULT_OK;
+            end_signals(mask);                          /* pri zltej alebo cervenej bez zmeny */
+            break;
     }
+
+    step();
+    return TRAFFIC_RESULT_OK;
 }
 
-TrafficPhase TrafficFsm_GetPhase(void)
+void TrafficFsm_GetStatus(TrafficFsmStatus *status)
 {
-    return phase;
-}
-
-void TrafficFsm_GetStatus(uint32_t now_ms, TrafficFsmStatus *status)
-{
-    if (status == 0)
+    if (status == NULL)
     {
         return;
     }
-
-    (void)TrafficFsm_Update(now_ms);
-
-    status->mode = active_mode;
-    status->next_mode = next_mode;
-    status->phase = phase;
-    status->ready = (uint8_t)((active_mode == TRAFFIC_MODE_CONTROL) &&
-                              (next_mode == TRAFFIC_MODE_NONE) &&
-                              all_red_guard_done(now_ms));
-}
-
-TrafficColor TrafficFsm_PhaseColor(TrafficPhase p, TrafficLight light)
-{
-    switch (light)
-    {
-        case TRAFFIC_LIGHT_A:
-            if (p == TRAFFIC_PHASE_A_GREEN)  return TRAFFIC_COLOR_GREEN;
-            if (p == TRAFFIC_PHASE_A_YELLOW) return TRAFFIC_COLOR_YELLOW;
-            break;
-        case TRAFFIC_LIGHT_B:
-            if (p == TRAFFIC_PHASE_B_GREEN)  return TRAFFIC_COLOR_GREEN;
-            if (p == TRAFFIC_PHASE_B_YELLOW) return TRAFFIC_COLOR_YELLOW;
-            break;
-        case TRAFFIC_LIGHT_C:
-            if (p == TRAFFIC_PHASE_C_GREEN)  return TRAFFIC_COLOR_GREEN;
-            if (p == TRAFFIC_PHASE_C_YELLOW) return TRAFFIC_COLOR_YELLOW;
-            break;
-        case TRAFFIC_LIGHT_P:
-            if (p == TRAFFIC_PHASE_P_GREEN)  return TRAFFIC_COLOR_GREEN;
-            break;
-        default:
-            break;
-    }
-    return TRAFFIC_COLOR_RED;
+    status->mode = fsm.mode;
+    status->next_mode = fsm.next_mode;
+    status->ready = fsm.mode == TRAFFIC_MODE_CONTROL &&
+                    fsm.next_mode == TRAFFIC_MODE_NONE && all_clear();
+    status->signals = current_signals();
+    status->car_c = fsm.car_c;
+    status->c_req = fsm.c_req;
+    status->p_req = fsm.p_req;
 }

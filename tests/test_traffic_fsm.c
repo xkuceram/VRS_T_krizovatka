@@ -1,321 +1,612 @@
 /*
- * Testy stavoveho automatu T-krizovatky (skusky F1 - F3) so simulovanym casom.
+ * Testy stavoveho automatu T-krizovatky na PC so simulovanym casom.
  *
- * Automat dostava cas ako parameter, preto sa da overit na PC bez dosky:
- *   gcc -std=c99 -Wall -Wextra -I../Core/Inc test_traffic_fsm.c ../Core/Src/traffic_fsm.c -o test_traffic_fsm
- *   ./test_traffic_fsm
- * alebo v priecinku tests: make
+ *   cd tests && make
+ *
+ * Automat dostava cas a vstupy ako parametre, takze sa da testovat bez dosky.
+ * Callback vystupov zaznamenava kazdu zmenu svetiel a pri kazdej zmene
+ * kontroluje bezpecnost podla konfliktnej matice zapisanej v tomto teste
+ * nezavisle od automatu:
+ *   - dva konfliktne signaly nikdy nesvietia naraz (zelena ani zlta),
+ *   - sipka A_S / C_S iba pri cervenej na A / C,
+ *   - signal sa zapne az ked su on sam aj vsetky konfliktne signaly cervene aspon 1 s,
+ *   - zlta trva cele 2 s, P nema zltu.
+ *
+ * Skusky podla README:
+ *   F1 - obsluha vjazdu C (snimac, 5 s statia, sipka C_S)
+ *   F2 - sipky, kolizie a chodci (Demo aj Control)
+ *   F3 - prepnutie rezimu
  */
 
 #include <stdio.h>
-#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include "traffic_fsm.h"
 
-static int failures = 0;
+/* ---------------------------------------------------------------------------
+ * Signaly a konfliktna matica testu
+ * ------------------------------------------------------------------------- */
+
+enum { A, AS, BR, BD, C, CS, P, NSIG };
+static const char *const sig_name[NSIG] = {"A", "A_S", "B_R", "B_D", "C", "C_S", "P"};
+
+#define M(s) (1U << (s))
+
+/* Odvodene z drah na obr. 1 v README (x = krizuju sa alebo zlievaju) */
+static const unsigned conflict[NSIG] =
+{
+    [A]  = M(BD) | M(C) | M(CS) | M(P),
+    [AS] = M(BD) | M(P),
+    [BR] = M(C),
+    [BD] = M(A) | M(AS) | M(C) | M(P),
+    [C]  = M(A) | M(BR) | M(BD) | M(P),
+    [CS] = M(A) | M(P),
+    [P]  = M(A) | M(AS) | M(BD) | M(C) | M(CS)
+};
+
+/* Fazy Demo */
+#define F1 (M(A) | M(BR))
+#define F2 (M(C) | M(AS))
+#define F3 (M(BR) | M(BD) | M(CS))
+#define F4 (M(BR) | M(P))
+
+/* ---------------------------------------------------------------------------
+ * Pomocne funkcie
+ * ------------------------------------------------------------------------- */
+
 static int checks = 0;
-static uint32_t now = 0;
+static int failures = 0;
+static int verbose = 0;                 /* 1 = vypis zmien svetiel */
 
-static const char *phase_name(TrafficPhase p)
+static uint32_t now;                    /* simulovany cas */
+static uint32_t t0;                     /* zaciatok testu (pre vypis) */
+
+#define CHECK(cond, ...)                                                    \
+    do {                                                                    \
+        checks++;                                                           \
+        if (!(cond)) {                                                      \
+            failures++;                                                     \
+            printf("  CHYBA (riadok %d, t=%lu ms): ", __LINE__,             \
+                   (unsigned long)(now - t0));                              \
+            printf(__VA_ARGS__);                                            \
+            printf("\n");                                                   \
+        }                                                                   \
+    } while (0)
+
+static bool car;                        /* stav snimaca CAR_C */
+static bool press;                      /* jednorazove stlacenie tlacidla */
+
+/* Stav svetiel z callbacku: 0 = cervena/zhasnuta, 1 = zelena, 2 = zlta */
+static int state[NSIG];
+static uint32_t since[NSIG];            /* kedy sa signal naposledy zmenil */
+static TrafficSignals last;
+static int changes;
+static int greens_started;
+static uint32_t br_red_ms;              /* ako dlho bola B_R nezelena (pre porovnanie plynulosti) */
+
+static int to_state(TrafficColor c)
 {
-    static const char *names[] = {"ALL_RED", "A_GREEN", "A_YELLOW", "B_GREEN", "B_YELLOW",
-                                  "C_GREEN", "C_YELLOW", "P_GREEN"};
-    return ((unsigned int)p < (unsigned int)TRAFFIC_PHASE_COUNT) ? names[p] : "?";
+    return c == TRAFFIC_COLOR_GREEN ? 1 : (c == TRAFFIC_COLOR_YELLOW ? 2 : 0);
 }
 
-static const char *result_name(TrafficResult r)
+static unsigned green(void)
 {
-    static const char *names[] = {"OK", "ERR BUSY", "ERR MODE", "ERR STATE", "ERR CONFLICT", "ERR PARAM"};
-    return names[r];
-}
-
-static const char *mode_name(TrafficMode m)
-{
-    return (m == TRAFFIC_MODE_DEMO) ? "DEMO" : (m == TRAFFIC_MODE_CONTROL) ? "CONTROL" : "-";
-}
-
-#define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; printf("  FAIL t=%5u ms: ", (unsigned)now); printf(__VA_ARGS__); printf("\n"); } } while (0)
-
-static void expect_phase(TrafficPhase expected)
-{
-    TrafficPhase p = TrafficFsm_GetPhase();
-    CHECK(p == expected, "faza %s, ocakavana %s", phase_name(p), phase_name(expected));
-}
-
-static void expect_result(TrafficResult r, TrafficResult expected, const char *command)
-{
-    printf("  t=%5u ms  %-16s -> %s\n", (unsigned)now, command, result_name(r));
-    CHECK(r == expected, "%s vratil %s, ocakavane %s", command, result_name(r), result_name(expected));
-}
-
-static void expect_status(TrafficMode mode, TrafficMode next, uint8_t ready)
-{
-    TrafficFsmStatus s;
-    TrafficFsm_GetStatus(now, &s);
-    printf("  t=%5u ms  STATUS           -> MODE=%s NEXT=%s READY=%u A=%c B=%c C=%c P=%c\n",
-           (unsigned)now, mode_name(s.mode), mode_name(s.next_mode), s.ready,
-           "RYG"[TrafficFsm_PhaseColor(s.phase, TRAFFIC_LIGHT_A)], "RYG"[TrafficFsm_PhaseColor(s.phase, TRAFFIC_LIGHT_B)],
-           "RYG"[TrafficFsm_PhaseColor(s.phase, TRAFFIC_LIGHT_C)], "RYG"[TrafficFsm_PhaseColor(s.phase, TRAFFIC_LIGHT_P)]);
-    CHECK(s.mode == mode && s.next_mode == next && s.ready == ready,
-          "STATUS MODE=%s NEXT=%s READY=%u, ocakavane MODE=%s NEXT=%s READY=%u",
-          mode_name(s.mode), mode_name(s.next_mode), s.ready, mode_name(mode), mode_name(next), ready);
-}
-
-/* Bezpecnostne pravidlo: v kazdej faze svieti nazeleno/nazlto najviac jeden semafor, ostatne cervena */
-static void check_safety(TrafficPhase p)
-{
-    int not_red = 0;
-    for (int l = 0; l < TRAFFIC_LIGHT_COUNT; l++)
+    unsigned m = 0;
+    for (int s = 0; s < NSIG; s++)
     {
-        if (TrafficFsm_PhaseColor(p, (TrafficLight)l) != TRAFFIC_COLOR_RED) not_red++;
+        if (state[s] == 1) m |= M(s);
     }
-    CHECK(not_red <= 1, "vo faze %s nesvieti cervena na %d semaforoch", phase_name(p), not_red);
+    return m;
 }
 
-/* Simulacia hlavnej slucky: volanie Update kazdych step_ms az do casu "until", vypis zmien fazy */
-static void run_until(uint32_t until, uint32_t step_ms, int print)
+static unsigned lit(void)
 {
-    TrafficPhase last = TrafficFsm_GetPhase();
-    while (now < until)
+    unsigned m = 0;
+    for (int s = 0; s < NSIG; s++)
     {
-        now += step_ms;
-        if (now > until) now = until;
-        TrafficPhase p = TrafficFsm_Update(now);
-        check_safety(p);
-        if (p != last)
+        if (state[s] != 0) m |= M(s);
+    }
+    return m;
+}
+
+static void print_state(void)
+{
+    static const char *const sym[3] = {".", "G", "Y"};
+    printf("  t=%6.1f s ", (double)(now - t0) / 1000.0);
+    for (int s = 0; s < NSIG; s++)
+    {
+        printf(" %s=%s", sig_name[s], sym[state[s]]);
+    }
+    printf("\n");
+}
+
+/* Callback vystupov - kontrola bezpecnosti pri kazdej zmene */
+static void on_output(const TrafficSignals *sig)
+{
+    int ns[NSIG];
+    ns[A] = to_state(sig->a);
+    ns[AS] = sig->a_s_on ? 1 : 0;
+    ns[BR] = to_state(sig->b_r);
+    ns[BD] = to_state(sig->b_d);
+    ns[C] = to_state(sig->c);
+    ns[CS] = sig->c_s_on ? 1 : 0;
+    ns[P] = to_state(sig->p);
+
+    changes++;
+    CHECK(ns[P] != 2, "P nema zltu");
+
+    for (int s = 0; s < NSIG; s++)
+    {
+        if (ns[s] == state[s])
         {
-            if (print) printf("  t=%5u ms  -> %s\n", (unsigned)now, phase_name(p));
-            last = p;
+            continue;
+        }
+        if (ns[s] == 1)
+        {
+            /* zapnutie: sam aj konfliktne signaly cervene aspon 1 s */
+            CHECK(state[s] == 0 && now - since[s] >= TRAFFIC_ALL_RED_MS,
+                  "%s sa zapol bez 1 s cervenej", sig_name[s]);
+            for (int t = 0; t < NSIG; t++)
+            {
+                if ((conflict[s] & M(t)) != 0U)
+                {
+                    CHECK(ns[t] == 0 && (state[t] != 0 || now - since[t] >= TRAFFIC_ALL_RED_MS),
+                          "%s sa zapol skor ako 1 s po konfliktnom %s", sig_name[s], sig_name[t]);
+                }
+            }
+            greens_started++;
+        }
+        else if (ns[s] == 2)
+        {
+            CHECK(state[s] == 1, "zlta %s iba po zelenej", sig_name[s]);
+        }
+        else if (state[s] == 2)
+        {
+            CHECK(now - since[s] >= TRAFFIC_YELLOW_MS, "zlta %s trvala iba %lu ms",
+                  sig_name[s], (unsigned long)(now - since[s]));
+        }
+        else
+        {
+            CHECK(s == AS || s == CS || s == P, "%s zhasol zo zelenej bez zltej", sig_name[s]);
+        }
+        state[s] = ns[s];
+        since[s] = now;
+    }
+
+    /* nikdy dva konfliktne signaly naraz, sipka iba pri cervenej na svojom semafore */
+    for (int s = 0; s < NSIG; s++)
+    {
+        for (int t = 0; t < NSIG; t++)
+        {
+            if ((conflict[s] & M(t)) != 0U)
+            {
+                CHECK(!(state[s] != 0 && state[t] != 0), "konflikt %s a %s", sig_name[s], sig_name[t]);
+            }
         }
     }
-}
+    CHECK(!(state[AS] && state[A]), "sipka A_S iba pri cervenej na A");
+    CHECK(!(state[CS] && state[C]), "sipka C_S iba pri cervenej na C");
 
-/* ------------------------------------------------------------------------------ */
-
-static void test_f1_demo_timing(void)
-{
-    /* ocakavane casy zmien podla tabulky Demo: 1 s startovacia cervena, potom cyklus 30 s */
-    static const struct { uint32_t t; TrafficPhase p; } expected[] =
+    if (verbose)
     {
-        {1000, TRAFFIC_PHASE_A_GREEN}, {6000, TRAFFIC_PHASE_A_YELLOW}, {8000, TRAFFIC_PHASE_ALL_RED},
-        {9000, TRAFFIC_PHASE_B_GREEN}, {14000, TRAFFIC_PHASE_B_YELLOW}, {16000, TRAFFIC_PHASE_ALL_RED},
-        {17000, TRAFFIC_PHASE_C_GREEN}, {22000, TRAFFIC_PHASE_C_YELLOW}, {24000, TRAFFIC_PHASE_ALL_RED},
-        {25000, TRAFFIC_PHASE_P_GREEN}, {30000, TRAFFIC_PHASE_ALL_RED},
-    };
-    const int n = (int)(sizeof(expected) / sizeof(expected[0]));
-
-    printf("\nF1 - casovanie Demo (2 cykly, krok 1 ms)\n");
-    now = 0;
-    TrafficFsm_Init(now);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-
-    for (int cycle = 0; cycle < 2; cycle++)
-    {
-        for (int i = 0; i < n; i++)
-        {
-            uint32_t t = expected[i].t + (uint32_t)cycle * 30000U;
-            run_until(t - 1, 1, 0);
-            CHECK(TrafficFsm_GetPhase() != expected[i].p, "faza %s zacala skor ako v case %u ms",
-                  phase_name(expected[i].p), (unsigned)t);
-            run_until(t, 1, 0);
-            printf("  t=%5u ms  -> %s\n", (unsigned)now, phase_name(TrafficFsm_GetPhase()));
-            expect_phase(expected[i].p);
-        }
+        print_state();
     }
-    run_until(61000, 1, 0);
-    expect_phase(TRAFFIC_PHASE_A_GREEN);          /* treti cyklus zacina fazou A */
+    last = *sig;
+}
 
-    printf("\nF1b - oneskorene volanie Update (krok 7 ms): zlta a spolocna cervena dostanu cely interval\n");
-    now = 0;
-    TrafficFsm_Init(now);
-    while (TrafficFsm_GetPhase() != TRAFFIC_PHASE_A_YELLOW)   /* hlavna slucka s periodou 7 ms */
+static void reset(uint32_t start)
+{
+    now = start;
+    t0 = start;
+    car = false;
+    press = false;
+    changes = 0;
+    greens_started = 0;
+    br_red_ms = 0;
+    for (int s = 0; s < NSIG; s++)
     {
-        now += 7;
-        TrafficFsm_Update(now);
+        state[s] = 0;
+        since[s] = start;
     }
-    uint32_t yellow_start = now;
-    printf("  zelena A skoncila v case %u ms (oneskorenie %u ms)\n", (unsigned)now, (unsigned)(now - 6000U));
-    run_until(yellow_start + TRAFFIC_YELLOW_MS - 1, 1, 0);
-    expect_phase(TRAFFIC_PHASE_A_YELLOW);
-    run_until(yellow_start + TRAFFIC_YELLOW_MS, 1, 0);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    uint32_t red_start = now;
-    run_until(red_start + TRAFFIC_ALL_RED_MS - 1, 1, 0);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    run_until(red_start + TRAFFIC_ALL_RED_MS, 1, 0);
-    expect_phase(TRAFFIC_PHASE_B_GREEN);
-    printf("  zlta trvala %u ms, spolocna cervena %u ms\n", (unsigned)TRAFFIC_YELLOW_MS, (unsigned)(now - red_start));
+    TrafficFsm_RegisterOutputCallback(on_output);
+    TrafficFsm_Init(now);
 }
 
-static void test_f2_conflicts(void)
+/* Posunie cas o ms v krokoch po 1 ms (hlavna slucka) */
+static void run(uint32_t ms)
 {
-    printf("\nF2 - kolizie v rezime Control\n");
-    now = 0;
-    TrafficFsm_Init(now);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_A, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_MODE, "SET A GREEN");
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now), TRAFFIC_RESULT_OK, "MODE CONTROL");
-    run_until(1000, 1, 1);
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 1);
-
-    /* zelena A, potom poziadavky na B a P */
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_A, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_OK, "SET A GREEN");
-    expect_phase(TRAFFIC_PHASE_A_GREEN);
-    run_until(3000, 1, 1);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_B, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET B GREEN");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET P GREEN");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_A, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_OK, "SET A GREEN");
-    expect_phase(TRAFFIC_PHASE_A_GREEN);
-
-    /* ukoncenie A cez zltu - pocas zltej aj spolocnej cervenej sa zelena zamietne */
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_A, TRAFFIC_COLOR_RED, now), TRAFFIC_RESULT_OK, "SET A RED");
-    expect_phase(TRAFFIC_PHASE_A_YELLOW);
-    run_until(4000, 1, 1);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_B, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET B GREEN");
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 0);
-    run_until(5500, 1, 1);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_B, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET B GREEN");
-    run_until(6000, 1, 1);
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 1);
-
-    /* po uplynuti spolocnej cervenej sa platny prikaz prijme - zelena P, potom C */
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_OK, "SET P GREEN");
-    expect_phase(TRAFFIC_PHASE_P_GREEN);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_C, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET C GREEN");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_YELLOW, now), TRAFFIC_RESULT_ERR_STATE, "SET P YELLOW");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_B, TRAFFIC_COLOR_YELLOW, now), TRAFFIC_RESULT_ERR_STATE, "SET B YELLOW");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_B, TRAFFIC_COLOR_RED, now), TRAFFIC_RESULT_OK, "SET B RED");
-    expect_phase(TRAFFIC_PHASE_P_GREEN);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_RED, now), TRAFFIC_RESULT_OK, "SET P RED");
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_C, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_CONFLICT, "SET C GREEN");
-    run_until(7000, 1, 1);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_C, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_OK, "SET C GREEN");
-
-    /* SET C YELLOW, pocas zltej SET C RED (zlta dobehne) a zelena trva do prikazu */
-    run_until(60000, 10, 1);
-    expect_phase(TRAFFIC_PHASE_C_GREEN);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_C, TRAFFIC_COLOR_YELLOW, now), TRAFFIC_RESULT_OK, "SET C YELLOW");
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_C, TRAFFIC_COLOR_RED, now), TRAFFIC_RESULT_OK, "SET C RED");
-    expect_phase(TRAFFIC_PHASE_C_YELLOW);
-    run_until(63000, 1, 1);
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 1);
-}
-
-static void test_f3_mode_switch(void)
-{
-    printf("\nF3 - prepnutie rezimu pocas cestnej zelenej a pocas zelenej pre chodcov\n");
-    now = 0;
-    TrafficFsm_Init(now);
-    run_until(3000, 1, 1);                         /* Demo, zelena A */
-    expect_phase(TRAFFIC_PHASE_A_GREEN);
-
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now), TRAFFIC_RESULT_OK, "MODE CONTROL");
-    expect_phase(TRAFFIC_PHASE_A_YELLOW);          /* cestna zelena konci zltou */
-    expect_status(TRAFFIC_MODE_DEMO, TRAFFIC_MODE_CONTROL, 0);
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_ERR_BUSY, "SET P GREEN");
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO, now), TRAFFIC_RESULT_ERR_BUSY, "MODE DEMO");
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now), TRAFFIC_RESULT_OK, "MODE CONTROL");
-    run_until(4999, 1, 1);
-    expect_phase(TRAFFIC_PHASE_A_YELLOW);          /* zlta trva cele 2 s */
-    run_until(5000, 1, 1);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    expect_status(TRAFFIC_MODE_DEMO, TRAFFIC_MODE_CONTROL, 0);
-    run_until(6000, 1, 1);                         /* po 1 s spolocnej cervenej aktivny Control */
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 1);
-    run_until(20000, 10, 1);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);           /* Control caka na prikaz */
-
-    expect_result(TrafficFsm_RequestColor(TRAFFIC_LIGHT_P, TRAFFIC_COLOR_GREEN, now), TRAFFIC_RESULT_OK, "SET P GREEN");
-    run_until(22000, 1, 1);
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO, now), TRAFFIC_RESULT_OK, "MODE DEMO");
-    expect_phase(TRAFFIC_PHASE_ALL_RED);           /* zelena pre chodcov -> spolocna cervena */
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_DEMO, 0);
-    run_until(22999, 1, 1);
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    run_until(23000, 1, 1);
-    expect_phase(TRAFFIC_PHASE_A_GREEN);           /* Demo zacina fazou A */
-    expect_status(TRAFFIC_MODE_DEMO, TRAFFIC_MODE_NONE, 0);
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO, now), TRAFFIC_RESULT_OK, "MODE DEMO");
-    run_until(28000, 1, 1);
-    expect_phase(TRAFFIC_PHASE_A_YELLOW);          /* cyklus pokracuje podla tabulky */
-
-    printf("\nF3b - prepnutie po uplynuti spolocnej cervenej prebehne ihned\n");
-    run_until(30500, 1, 1);                        /* Demo krok 3: spolocna cervena 30000-31000 */
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now), TRAFFIC_RESULT_OK, "MODE CONTROL");
-    expect_status(TRAFFIC_MODE_DEMO, TRAFFIC_MODE_CONTROL, 0);
-    run_until(31000, 1, 1);
-    expect_status(TRAFFIC_MODE_CONTROL, TRAFFIC_MODE_NONE, 1);
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now), TRAFFIC_RESULT_OK, "MODE CONTROL");
-    expect_result(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO, now), TRAFFIC_RESULT_OK, "MODE DEMO");
-    expect_phase(TRAFFIC_PHASE_A_GREEN);           /* ochranny interval uz uplynul -> ihned Demo */
-    expect_status(TRAFFIC_MODE_DEMO, TRAFFIC_MODE_NONE, 0);
-
-    printf("\nF3c - pretecenie milisekundoveho casu (uint32_t)\n");
-    now = 0xFFFFFC18U;                             /* 1 s pred pretecenim */
-    TrafficFsm_Init(now);
-    run_until(0xFFFFFFFFU, 1, 0);
-    now = 0xFFFFFFFFU;
-    expect_phase(TRAFFIC_PHASE_ALL_RED);
-    now = 0U;                                      /* cas pretiekol, od Init uplynula 1 s */
-    TrafficFsm_Update(now);
-    printf("  t=%5u ms  -> %s\n", (unsigned)now, phase_name(TrafficFsm_GetPhase()));
-    expect_phase(TRAFFIC_PHASE_A_GREEN);
-}
-
-/* Simulovany ovladac GPIO - callback registrovany v automate */
-static TrafficPhase gpio_phase = TRAFFIC_PHASE_COUNT;
-static unsigned gpio_calls = 0;
-
-static void fake_gpio_apply(TrafficPhase p)
-{
-    gpio_phase = p;
-    gpio_calls++;
-}
-
-static void test_callback(void)
-{
-    printf("\nCallback pre zmenu fazy (oddelenie automatu od GPIO)\n");
-
-    /* bez registracie (NULL) automat funguje a nic nevola */
-    TrafficFsm_RegisterPhaseCallback(0);
-    now = 0;
-    TrafficFsm_Init(now);
-    run_until(2000, 1, 0);
-    CHECK(gpio_calls == 0, "callback volany bez registracie");
-
-    /* registracia pred Init: pociatocna spolocna cervena sa oznami hned */
-    TrafficFsm_RegisterPhaseCallback(fake_gpio_apply);
-    now = 0;
-    TrafficFsm_Init(now);
-    CHECK(gpio_calls == 1 && gpio_phase == TRAFFIC_PHASE_ALL_RED, "Init neoznamil spolocnu cervenu");
-
-    /* pocas jedneho cyklu Demo: kazda zmena fazy = jedno volanie, GPIO ma vzdy aktualnu fazu */
-    unsigned changes = 0;
-    TrafficPhase last = TrafficFsm_GetPhase();
-    while (now < 31000)
+    for (uint32_t i = 0; i < ms; i++)
     {
         now++;
-        TrafficPhase p = TrafficFsm_Update(now);
-        if (p != last) { changes++; last = p; }
-        CHECK(gpio_phase == p, "GPIO zobrazuje %s, automat je vo faze %s", phase_name(gpio_phase), phase_name(p));
+        TrafficFsm_Update(now, car, press);
+        press = false;
+        if (state[BR] != 1)
+        {
+            br_red_ms++;
+        }
     }
-    printf("  zmien fazy: %u, volani callbacku: %u (vratane Init)\n", changes, gpio_calls);
-    CHECK(gpio_calls == changes + 1U, "pocet volani callbacku %u, ocakavany %u", gpio_calls, changes + 1U);
+}
 
-    /* zmena fazy vyvolana prikazom sa oznami tiez */
-    TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL, now);
-    CHECK(gpio_phase == TrafficFsm_GetPhase(), "zmena fazy po MODE CONTROL nebola oznamena");
+/* Posunie cas na absolutny cas testu (ms od reset) */
+static void run_to(uint32_t t)
+{
+    if (t > now - t0)
+    {
+        run(t - (now - t0));
+    }
+}
 
-    TrafficFsm_RegisterPhaseCallback(0);
+static void press_button(void)
+{
+    press = true;
+    run(1);
+}
+
+static TrafficFsmStatus status(void)
+{
+    TrafficFsmStatus st;
+    TrafficFsm_GetStatus(&st);
+    return st;
+}
+
+static TrafficResult set(TrafficTarget t, TrafficColor c)
+{
+    return TrafficFsm_RequestSignal(t, c);
+}
+
+/* Ocakavany stav: zelene signaly (maska) a zlte (maska) v case t */
+static void expect_at(uint32_t t, unsigned greens, unsigned yellows, const char *what)
+{
+    run_to(t);
+    unsigned y = lit() & ~green();
+    CHECK(green() == greens && y == yellows, "%s: zelene 0x%02x (ocak. 0x%02x), zlte 0x%02x (ocak. 0x%02x)",
+          what, green(), greens, y, yellows);
+}
+
+/* ---------------------------------------------------------------------------
+ * F1 - Obsluha vjazdu C
+ * ------------------------------------------------------------------------- */
+
+static void test_f1(void)
+{
+    printf("F1a - volny vjazd C: F1 -> F3 -> F1, B_R ma zelenu nepretrzite\n");
+    verbose = 1;
+    reset(0);
+    CHECK(changes == 1 && lit() == 0U, "po inicializacii vsetko cervene");
+    expect_at(999, 0, 0, "prva sekunda spolocna cervena");
+    expect_at(1000, F1, 0, "F1");
+    expect_at(6000, M(BR), M(A), "A zlta, B_R pokracuje");
+    expect_at(8000, M(BR), 0, "A cervena");
+    expect_at(9000, F3, 0, "F3 vratane sipky C_S aj bez auta");
+    expect_at(14000, M(BR), M(BD), "B_D zlta, C_S zhasne, B_R pokracuje");
+    expect_at(17000, F1, 0, "opat F1, cyklus 16 s");
+    run_to(33000);
+    CHECK(br_red_ms == 999U, "B_R bola nezelena iba prvu sekundu (%lu ms)", (unsigned long)br_red_ms);
+    verbose = 0;
+
+    printf("F1b - auto stoji na C: F1 -> F2 (C oba smery + A_S) -> F3 -> F1\n");
+    verbose = 1;
+    reset(0);
+    car = true;                         /* snimac sa precita v prvom kroku (t = 1 ms) */
+    expect_at(1000, F1, 0, "F1");
+    run_to(5000);
+    CHECK(!status().c_req, "po 4,999 s statia este C_REQ=0");
+    run(1);
+    CHECK(status().c_req, "po 5 s statia C_REQ=1");
+    expect_at(6000, 0, M(A) | M(BR), "A aj B_R zlta");
+    expect_at(8000, M(AS), 0, "A_S hned po zltej A (ten isty pohyb)");
+    expect_at(9000, F2, 0, "F2: C a A_S");
+    CHECK(!status().c_req, "C_REQ=0 po zapnuti C");
+    expect_at(14000, 0, M(C), "C zlta, A_S zhasne");
+    expect_at(16000, M(CS), 0, "sipka C_S hned po cervenej na C");
+    expect_at(17000, F3, 0, "F3");
+    expect_at(22000, M(BR), M(BD), "B_D zlta, B_R pokracuje");
+    expect_at(25000, F1, 0, "opat F1, cyklus 24 s");
+    verbose = 0;
+
+    printf("F1c - auto snimacom len prejde (2 s): faza C sa nezaradi\n");
+    reset(0);
+    run_to(2000);
+    car = true;
+    run(2000);
+    car = false;
+    expect_at(9000, F3, 0, "po F1 rovno F3");
+    CHECK(!status().c_req, "C_REQ=0");
+
+    printf("F1d - hranica 5 s: 4,999 s nestaci, 5 s ano\n");
+    reset(0);
+    car = true;                         /* snimac sa precita v prvom kroku (t = 1 ms) */
+    run_to(5000);
+    CHECK(!status().c_req, "po 4,999 s este C_REQ=0");
+    run(1);
+    CHECK(status().c_req, "po 5 s C_REQ=1");
+    car = false;
+    expect_at(9000, F2, 0, "poziadavka sa drzi aj ked auto odide pri cervenej");
+
+    printf("F1e - auto pocka 5 s a odboci doprava po sipke C_S: poziadavka sa zrusi\n");
+    reset(0);
+    run_to(17500);                      /* F1 druheho cyklu */
+    car = true;
+    run_to(22600);
+    CHECK(status().c_req, "C_REQ=1 (zapisane po skonceni F1)");
+    expect_at(25000, F3, 0, "F3 (C_REQ prisiel neskoro na F2)");
+    run_to(26000);
+    car = false;                        /* odbocil doprava po sipke */
+    run(1);
+    CHECK(!status().c_req, "C_REQ=0 po odchode pocas sipky");
+    expect_at(41000, F3, 0, "dalsi cyklus bez F2");
+
+    printf("F1f - auto ostane stat: F2 pride po najblizsej F1\n");
+    reset(0);
+    run_to(17500);
+    car = true;
+    expect_at(25000, F3, 0, "F3");
+    expect_at(33000, F1, 0, "F1");
+    expect_at(41000, F2, 0, "F2 po F1");
+}
+
+/* ---------------------------------------------------------------------------
+ * F2 - Sipky, kolizie a chodci
+ * ------------------------------------------------------------------------- */
+
+static void test_f2(void)
+{
+    printf("F2a - chodec pocas F1: F1 -> F4 (P + B_R) -> F3 -> F1, B_R nezastavi\n");
+    verbose = 1;
+    reset(0);
+    run_to(2000);
+    press_button();
+    CHECK(status().p_req, "P_REQ=1");
+    expect_at(6000, M(BR), M(A), "A zlta");
+    expect_at(9000, F4, 0, "F4: chodci a B_R");
+    CHECK(!status().p_req, "P_REQ=0 po zapnuti P");
+    press_button();
+    CHECK(!status().p_req, "stlacenie pocas zelenej P patri do prebiehajucej fazy");
+    expect_at(14000, M(BR), 0, "P rovno na cervenu, B_R pokracuje");
+    expect_at(15000, F3, 0, "F3 po 1 s ochrany za chodcami");
+    expect_at(25000, F1, 0, "F1");
+    CHECK(br_red_ms == 999U, "B_R ani raz nezastavila (%lu ms nezelena)", (unsigned long)br_red_ms);
+    verbose = 0;
+
+    printf("F2b - chodec pocas F3: F3 -> F4 -> F1\n");
+    reset(0);
+    run_to(10000);
+    press_button();
+    expect_at(14000, M(BR), M(BD), "B_D zlta");
+    expect_at(17000, F4, 0, "F4");
+    expect_at(22000, M(BR), 0, "P cervena");
+    expect_at(23000, F1, 0, "F1 po chodcoch");
+
+    printf("F2c - chodec aj auto na C: F1 -> F4 -> F2 -> F3\n");
+    verbose = 1;
+    reset(0);
+    car = true;
+    run_to(2000);
+    press_button();
+    expect_at(9000, F4, 0, "F4");
+    expect_at(14000, 0, M(BR), "B_R zlta (konflikt s C)");
+    expect_at(15000, M(AS), M(BR), "A_S 1 s po chodcoch");
+    expect_at(17000, F2, 0, "F2 1 s po cervenej B_R");
+    expect_at(25000, F3, 0, "F3");
+    verbose = 0;
+
+    printf("F2d - Control: zelena sa prida, ak je podla matice volna\n");
+    reset(0);
+    CHECK(set(TRAFFIC_TARGET_A, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_MODE, "SET v Demo -> ERR MODE");
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL) == TRAFFIC_RESULT_OK, "MODE CONTROL");
+    run(TRAFFIC_ALL_RED_MS);
+    CHECK(status().mode == TRAFFIC_MODE_CONTROL && status().ready, "Control, READY=1");
+    CHECK(set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET B_D GREEN");
+    CHECK(!status().ready, "READY=0 ked nieco svieti");
+    CHECK(set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "opakovany SET potvrdi");
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "A_S pri B_D -> ERR CONFLICT");
+    CHECK(set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "P pri B_D -> ERR CONFLICT");
+    CHECK(set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "C_S pri B_D -> OK");
+    CHECK(set(TRAFFIC_TARGET_B, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET B doplni B_R");
+    CHECK(green() == F3, "rucne zostavena F3");
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_YELLOW) == TRAFFIC_RESULT_ERR_STATE, "SET A_S YELLOW -> ERR STATE");
+    CHECK(set(TRAFFIC_TARGET_A, TRAFFIC_COLOR_YELLOW) == TRAFFIC_RESULT_ERR_STATE, "SET A YELLOW pri cervenej A -> ERR STATE");
+    CHECK(set(TRAFFIC_TARGET_A, TRAFFIC_COLOR_RED) == TRAFFIC_RESULT_OK, "SET A RED pri cervenej A potvrdi");
+    run(10000);
+    CHECK(green() == F3, "v Control zelena trva do prikazu");
+    CHECK(set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_RED) == TRAFFIC_RESULT_OK, "SET B_D RED");
+    CHECK(state[BD] == 2 && state[BR] == 1 && state[CS] == 1, "konci iba B_D (zlta), ostatne svietia");
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "A_S pocas zltej B_D -> ERR CONFLICT");
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS - 1U);
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "999 ms po cervenej B_D este ERR CONFLICT");
+    run(1);
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "A_S po 1 s -> OK");
+    CHECK(green() == (M(AS) | M(BR) | M(CS)), "F5: A_S, B_R a C_S naraz");
+
+    printf("F2e - spolocna skuska bod 3: A_S, ERR CONFLICT pre B_D, potom B_D\n");
+    set(TRAFFIC_TARGET_B_R, TRAFFIC_COLOR_RED);
+    set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_RED);
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(green() == M(AS), "svieti iba A_S");
+    CHECK(set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "SET B_D GREEN pri A_S -> ERR CONFLICT");
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_RED) == TRAFFIC_RESULT_OK, "SET A_S RED");
+    CHECK(lit() == 0U, "sipka zhasne hned");
+    run(TRAFFIC_ALL_RED_MS);
+    CHECK(set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET B_D GREEN po 1 s");
+
+    printf("F2f - C a sipka C_S: sipka iba pri cervenej C, hned po zltej\n");
+    set(TRAFFIC_TARGET_B_D, TRAFFIC_COLOR_RED);
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(set(TRAFFIC_TARGET_C, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET C GREEN");
+    CHECK(set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "A_S k C -> OK (F2)");
+    CHECK(set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "C_S pri zelenej C -> ERR CONFLICT");
+    CHECK(set(TRAFFIC_TARGET_B_R, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "B_R pri C -> ERR CONFLICT");
+    CHECK(set(TRAFFIC_TARGET_C, TRAFFIC_COLOR_YELLOW) == TRAFFIC_RESULT_OK, "SET C YELLOW");
+    CHECK(set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "C_S pocas zltej C -> ERR CONFLICT");
+    run(TRAFFIC_YELLOW_MS);
+    CHECK(set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "C_S hned po cervenej C");
+
+    printf("F2g - chodci a auto v Control: P_REQ a C_REQ vybavia prikazy\n");
+    set(TRAFFIC_TARGET_C_S, TRAFFIC_COLOR_RED);
+    set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_RED);
+    run(TRAFFIC_ALL_RED_MS);
+    press_button();
+    car = true;
+    run(TRAFFIC_CAR_WAIT_MS + 1U);
+    CHECK(status().p_req && status().c_req && status().car_c, "P_REQ=1 C_REQ=1 CAR_C=1");
+    CHECK(lit() == 0U, "v Control sa nic samo nezapne");
+    CHECK(set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_YELLOW) == TRAFFIC_RESULT_ERR_STATE, "SET P YELLOW -> ERR STATE");
+    CHECK(set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET P GREEN");
+    CHECK(set(TRAFFIC_TARGET_B_R, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "B_R k chodcom -> OK (F4)");
+    CHECK(set(TRAFFIC_TARGET_A, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_CONFLICT, "A pri chodcoch -> ERR CONFLICT");
+    CHECK(!status().p_req, "P_REQ=0");
+    set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_RED);
+    set(TRAFFIC_TARGET_B_R, TRAFFIC_COLOR_RED);
+    CHECK(state[P] == 0, "P prejde rovno na cervenu");
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(set(TRAFFIC_TARGET_C, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK && !status().c_req, "SET C GREEN, C_REQ=0");
+
+    printf("F2h - neplatne parametre\n");
+    CHECK(set(TRAFFIC_TARGET_COUNT, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_PARAM, "neplatny ciel");
+    CHECK(set(TRAFFIC_TARGET_A, (TrafficColor)7) == TRAFFIC_RESULT_ERR_PARAM, "neplatna farba");
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_NONE) == TRAFFIC_RESULT_ERR_PARAM, "neplatny rezim");
+}
+
+/* ---------------------------------------------------------------------------
+ * F3 - Prepnutie rezimu
+ * ------------------------------------------------------------------------- */
+
+static void test_f3(void)
+{
+    printf("F3a - pocas F3 stlacit tlacidlo a prepnut do Control\n");
+    verbose = 1;
+    reset(0);
+    run_to(10000);
+    CHECK(green() == F3, "F3");
+    press_button();
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL) == TRAFFIC_RESULT_OK, "MODE CONTROL");
+    CHECK(state[CS] == 0 && state[BR] == 2 && state[BD] == 2, "C_S zhasne hned, oba B na zltu");
+    TrafficFsmStatus st = status();
+    CHECK(st.mode == TRAFFIC_MODE_DEMO && st.next_mode == TRAFFIC_MODE_CONTROL && !st.ready,
+          "pocas prepinania MODE=DEMO NEXT=CONTROL READY=0");
+    CHECK(set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_ERR_BUSY, "SET pocas prepinania -> ERR BUSY");
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO) == TRAFFIC_RESULT_ERR_BUSY, "navrat do opustaneho rezimu -> ERR BUSY");
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL) == TRAFFIC_RESULT_OK, "opakovany ten isty ciel -> OK");
+    run(TRAFFIC_YELLOW_MS);
+    CHECK(lit() == 0U && status().next_mode == TRAFFIC_MODE_CONTROL, "spolocna cervena, prepinanie trva");
+    run(TRAFFIC_ALL_RED_MS);
+    st = status();
+    CHECK(st.mode == TRAFFIC_MODE_CONTROL && st.next_mode == TRAFFIC_MODE_NONE && st.ready && st.p_req,
+          "MODE=CONTROL NEXT=- READY=1 P_REQ=1");
+    run(10000);
+    CHECK(lit() == 0U, "Control caka pri spolocnej cervenej");
+    CHECK(set(TRAFFIC_TARGET_P, TRAFFIC_COLOR_GREEN) == TRAFFIC_RESULT_OK, "SET P GREEN");
+    run(2000);
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO) == TRAFFIC_RESULT_OK, "MODE DEMO pocas zelenej P");
+    CHECK(lit() == 0U, "P rovno na cervenu");
+    run(TRAFFIC_ALL_RED_MS - 1U);
+    CHECK(lit() == 0U && status().next_mode == TRAFFIC_MODE_DEMO, "ochranna sekunda");
+    run(1);
+    CHECK(green() == F1 && status().mode == TRAFFIC_MODE_DEMO, "Demo zacne fazou F1");
+    verbose = 0;
+
+    printf("F3b - prepnutie pri uz uplynutej ochrannej sekunde je okamzite\n");
+    reset(0);
+    TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL);
+    run(5000);
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO) == TRAFFIC_RESULT_OK, "MODE DEMO");
+    CHECK(status().mode == TRAFFIC_MODE_DEMO && green() == F1, "prepne hned a zacne F1");
+    CHECK(TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO) == TRAFFIC_RESULT_OK, "MODE DEMO v Demo potvrdi");
+
+    printf("F3c - zmena rezimu pocas cestnej zelenej v Control (cez zltu)\n");
+    TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL);
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    set(TRAFFIC_TARGET_C, TRAFFIC_COLOR_GREEN);
+    set(TRAFFIC_TARGET_A_S, TRAFFIC_COLOR_GREEN);
+    TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO);
+    CHECK(state[C] == 2 && state[AS] == 0, "C dobehne cez zltu, sipka zhasne hned");
+    run(TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(green() == F1, "Demo od F1");
+
+    printf("F3d - cakajuce poziadavky sa prenesu do Demo\n");
+    reset(0);
+    TrafficFsm_RequestMode(TRAFFIC_MODE_CONTROL);
+    car = true;
+    run(TRAFFIC_CAR_WAIT_MS + 1U);
+    press_button();
+    TrafficFsm_RequestMode(TRAFFIC_MODE_DEMO);
+    CHECK(green() == F1 && status().p_req && status().c_req, "F1, P_REQ=1, C_REQ=1");
+    run(TRAFFIC_GREEN_MS + TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(green() == F4, "chodci po F1");
+    run(TRAFFIC_GREEN_MS + TRAFFIC_YELLOW_MS + TRAFFIC_ALL_RED_MS);
+    CHECK(green() == F2, "potom vjazd C");
+}
+
+/* ---------------------------------------------------------------------------
+ * Dalsie kontroly
+ * ------------------------------------------------------------------------- */
+
+static void test_overflow(void)
+{
+    printf("Pretecenie milisekundoveho casu (uint32_t)\n");
+    reset(0xFFFFFFFFU - 3000U);
+    run(1000);
+    CHECK(green() == F1, "F1 pred pretecenim");
+    run(8000);
+    CHECK(now < 10000U && green() == F3, "F3 po preteceni");
+}
+
+static void test_callback_null(void)
+{
+    printf("Automat bez callbacku (NULL)\n");
+    TrafficFsm_RegisterOutputCallback(NULL);
+    TrafficFsm_Init(0);
+    for (uint32_t t = 1; t < 20000U; t++)
+    {
+        TrafficFsm_Update(t, false, false);
+    }
+    TrafficFsmStatus st;
+    TrafficFsm_GetStatus(&st);
+    TrafficFsm_GetStatus(NULL);
+    now = t0 = 0;
+    CHECK(st.mode == TRAFFIC_MODE_DEMO, "bezi aj bez callbacku");
+}
+
+/* Dlha nahodna simulacia: vstupy aj prikazy nahodne, bezpecnost sa kontroluje v on_output */
+static void test_random(void)
+{
+    printf("Nahodna simulacia 2 hodiny (vstupy aj prikazy), kontrola matice pri kazdej zmene\n");
+    srand(12345U);
+    reset(0);
+    const int start_failures = failures;
+    for (uint32_t i = 0; i < 2U * 3600U * 1000U; i++)
+    {
+        if (rand() % 8000 == 0) car = !car;
+        if (rand() % 15000 == 0) press = true;
+        if (rand() % 1500 == 0)
+        {
+            if (rand() % 12 == 0)
+            {
+                TrafficFsm_RequestMode((TrafficMode)(rand() % 2));
+            }
+            else
+            {
+                TrafficFsm_RequestSignal((TrafficTarget)(rand() % TRAFFIC_TARGET_COUNT),
+                                         (TrafficColor)(rand() % 3));
+            }
+        }
+        run(1);
+        if (failures - start_failures > 20) break;
+    }
+    printf("  zmien svetiel: %d, zapnutych signalov: %d\n", changes, greens_started);
+    CHECK(greens_started > 1000, "simulacia presla mnoho zmien");
 }
 
 int main(void)
 {
-    test_callback();
-    test_f1_demo_timing();
-    test_f2_conflicts();
-    test_f3_mode_switch();
+    test_f1();
+    test_f2();
+    test_f3();
+    test_overflow();
+    test_callback_null();
+    test_random();
 
-    printf("\n%d kontrol, %d chyb -> %s\n", checks, failures, failures ? "NEUSPECH" : "VSETKY TESTY PRESLI");
-    return failures ? 1 : 0;
+    printf("\n%d kontrol, %d chyb -> %s\n", checks, failures,
+           failures == 0 ? "VSETKY TESTY PRESLI" : "NIEKTORE TESTY ZLYHALI");
+    return failures == 0 ? 0 : 1;
 }
