@@ -10,7 +10,7 @@ Značka pri odseku odkazuje na vetvu v [rozdelení práce](#rozdelenie-práce) a
 
 Zostavíme model T-križovatky so štyrmi cestnými semaformi, semaforom pre chodcov a dvoma zelenými šípkami. Svetlá pripojíme priamo na 12 výstupov dosky STM32 NUCLEO-F303K8. Na vjazde C bude jeden spoločný pruh pre odbočenie doľava aj doprava a jeden IR snímač pri stopčiare. Chodci si zelenú vyžiadajú tlačidlom. <sub>· traffic-fsm · model-gpio</sub>
 
-Na obhajobe ukážeme cyklus Demo pri voľnom aj obsadenom vjazde C. Predvedieme oba súbehy pri odbočovaní z C a odmeriame trvanie žltej a spoločnej červenej. V režime Control vyskúšame ovládanie z terminálu a odmietnutie kolízneho príkazu. <sub>· traffic-fsm · model-gpio · usart-control</sub>
+Na obhajobe ukážeme cyklus Demo pri voľnom aj obsadenom vjazde C. Predvedieme, že signál pokračujúci v ďalšej fáze nezhasne, zaradenie fázy C po 5 s státia auta a odmeriame trvanie žltej a ochranného času. V režime Control vyskúšame ovládanie z terminálu a odmietnutie kolízneho príkazu. <sub>· traffic-fsm · model-gpio · usart-control</sub>
 
 ## Obsah
 
@@ -40,7 +40,7 @@ Hlavná cesta vedie v pôdoryse zľava doprava. Na vjazde B sprava je pruh na ja
 | `A_S` | Zľava | Odbočiť dole pri červenej na `A` | Zelená šípka |
 | `B_R` | Sprava | Pokračovať po hlavnej rovno doľava | Červená, žltá, zelená |
 | `B_D` | Sprava | Odbočiť dole na vedľajšiu | Červená, žltá, zelená |
-| `C` | Spoločný vjazd zdola | Odbočiť doľava z C do A | Červená, žltá, zelená |
+| `C` | Spoločný vjazd zdola | Odbočiť doľava z C do A aj doprava z C do B | Červená, žltá, zelená |
 | `C_S` | Spoločný vjazd zdola | Odbočiť doprava z C do B pri červenej na `C` | Zelená šípka |
 | `P` | Priechod cez dolnú vetvu | Prejsť cez priechod | Červená, zelená |
 
@@ -51,9 +51,26 @@ Hlavná cesta vedie v pôdoryse zľava doprava. Na vjazde B sprava je pruh na ja
 ### Pravidlá signalizácie
 
 - Po inicializácii sa rozsvieti päť červených svetiel. Obe šípky sú zhasnuté. Prvá zelená môže začať po jednej sekunde spoločnej červenej. <sub>· traffic-fsm · model-gpio</sub>
-- Na každom bežnom semafore svieti v ustálenom stave práve jedna farba. Šípka `A_S` môže svietiť iba pri červenej na `A`. Pravé odbočenie z C je povolené pri rozsvietenej šípke `C_S` a červenej na `C`. Pri zelenej pre chodcov sú všetky štyri cestné semafory na červenej a obe šípky zhasnuté. <sub>· traffic-fsm</sub>
-- Automat povolí iba cestné kombinácie uvedené pri Demo a jednotlivé voľby z tabuľky príkazov v Control. Napríklad `A_S` a `B_D` by viedli do toho istého výjazdového pruhu, preto sa zapínajú v rôznych fázach. <sub>· traffic-fsm · usart-control</sub>
-- Pri ukončení fázy šípky zhasnú a bežné cestné semafory, ktoré mali zelenú, prejdú naraz na žltú na 2 s. Pri ukončení fázy so samotnou šípkou alebo chodcami sa prejde rovno na spoločnú červenú. Pred každou ďalšou zelenou musí spoločná červená trvať aspoň 1 s. <sub>· traffic-fsm</sub>
+- Na každom bežnom semafore svieti v ustálenom stave práve jedna farba. Zelená na `A` aj na `C` púšťa oba smery. Šípka `A_S` môže svietiť iba pri červenej na `A` a šípka `C_S` iba pri červenej na `C`. <sub>· traffic-fsm</sub>
+- O povolených kombináciách rozhoduje konfliktná matica. Dva signály, ktorých dráhy sa križujú alebo zlievajú do jedného pruhu, nesmú svietiť súčasne. <sub>· traffic-fsm · usart-control</sub>
+- Signál, ktorý pokračuje aj v ďalšej fáze, pri zmene fázy nezhasne. Končiace bežné semafory prejdú na 2 s na žltú, šípky zhasnú a P prejde na červenú hneď. <sub>· traffic-fsm</sub>
+- Nový signál sa zapne, až keď on sám aj všetky signály, s ktorými je v konflikte, svietia načerveno aspoň 1 s. Šípka môže naskočiť hneď po žltej na svojom semafore, lebo pokračuje ten istý pohyb. <sub>· traffic-fsm</sub>
+
+<sub>traffic-fsm</sub>
+
+| | `A` | `A_S` | `B_R` | `B_D` | `C` | `C_S` | `P` |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`A`** | | – | | ✕ | ✕ | ✕ | ✕ |
+| **`A_S`** | – | | | ✕ | | | ✕ |
+| **`B_R`** | | | | | ✕ | | |
+| **`B_D`** | ✕ | ✕ | | | ✕ | | ✕ |
+| **`C`** | ✕ | | ✕ | ✕ | | – | ✕ |
+| **`C_S`** | ✕ | | | | – | | ✕ |
+| **`P`** | ✕ | ✕ | | ✕ | ✕ | ✕ | |
+
+*Konfliktná matica. ✕ znamená, že dráhy sa križujú alebo zlievajú do jedného pruhu podľa obr. 1. Znak – označuje šípku a jej bežný semafor, ktoré nesvietia súčasne.* <sub>· traffic-fsm</sub>
+
+Odbočenie z `A` dole prechádza cez priechod a `A` má pre oba smery jedno svetlo. Pri zelenej pre chodcov preto môže ísť iba `B_R`, ktorá do dolnej vetvy nezasahuje. <sub>· traffic-fsm</sub>
 
 ### Tlačidlo pre chodcov a snímanie na C
 
@@ -61,11 +78,11 @@ Tlačidlo dáme vedľa priechodu P. Zákmity kontaktu odfiltrujeme, aby jedno st
 
 Automat vybaví požiadavku zapnutím zelenej pre P. Stlačenie počas zelenej pre P patrí do prebiehajúcej fázy. Reset čakajúcu požiadavku vymaže. <sub>· traffic-fsm</sub>
 
+Auto, ktoré snímačom na C len prejde, fázu C nevyvolá. Požiadavku `C_REQ` automat zapíše, až keď auto stojí pred snímačom nepretržite 5 s pri nezelenej `C`. Požiadavka trvá, kým `C` nedostane zelenú. Ak sa snímač uvoľní počas svietiacej šípky `C_S`, auto odbočilo doprava a požiadavka sa zruší. <sub>· traffic-fsm</sub>
+
 Jeden IR snímač pri stopčiare na C sleduje obsadenosť spoločného vjazdu. Jeho dosah overíme so stojacim autom aj pri prejazde v susednom výjazdovom pruhu. <sub>· model-gpio</sub>
 
 ### Režim Demo
-
-Pri zelenej na `A` môže vozidlo odbočiť z A na C cez priechod. Chodci preto dostávajú zelenú vo vlastnej fáze, keď sú cestné semafory na červenej a obe šípky zhasnuté. <sub>· traffic-fsm</sub>
 
 V tabuľke znamená **1** zelenú alebo svietiacu šípku. **0** znamená červenú alebo zhasnutú šípku. Žltá patrí do prechodu medzi fázami. <sub>· traffic-fsm</sub>
 
@@ -73,31 +90,45 @@ V tabuľke znamená **1** zelenú alebo svietiacu šípku. **0** znamená červe
 
 | Fáza | `A` | `A_S` | `B_R` | `B_D` | `C` | `C_S` | `P` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| A | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| C doľava | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
-| B s odbočením z C doprava | 0 | 0 | 1 | 1 | 0 | 1 | 0 |
-| B pri voľnom vjazde C | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
-| Chodci | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| F1 – Hlavná cesta | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
+| F2 – Vjazd C (oba smery) | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
+| F3 – B a šípka z C doprava | 0 | 0 | 1 | 1 | 0 | 1 | 0 |
+| F4 – Chodci a B rovno | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
 | Spoločná červená | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
-Režim Demo začne fázou A po spoločnej červenej. Po ukončení fázy A a ochrannej sekunde vyhodnotíme obsadenosť vjazdu C. V automate ju označíme ako `CAR_C`. <sub>· traffic-fsm</sub>
+Fázy sa striedajú v poradí F1 → [F4] → [F2] → F3 → [F4] → F1. Fáza F4 sa zaradí, ak čaká chodec, a F2, ak je zapísaná `C_REQ`. Bez požiadaviek sa strieda iba F1 a F3. Po štarte aj po návrate do Demo začne automat fázou F1. <sub>· traffic-fsm</sub>
 
-- Pri `CAR_C=0` nasleduje B pri voľnom vjazde C a potom opäť A. <sub>· traffic-fsm</sub>
-- Pri `CAR_C=1` nasleduje C doľava, potom B s odbočením z C doprava a nakoniec opäť A. Jeden snímač určuje obsadenosť vjazdu, preto v tomto cykle vyhradíme čas pre obe odbočenia. Ak sa vjazd uvoľní počas prvej fázy C, druhá sa aj tak vykoná. Novú obsadenosť vyhodnotíme po ďalšej fáze A. <sub>· traffic-fsm</sub>
+`B_R` svieti vo fázach F1, F3 aj F4, preto pri prechode medzi nimi nezastaví. Pri voľnom vjazde C má hlavná cesta sprava zelenú nepretržite. Šípka `C_S` svieti v každej fáze F3, takže auto odbočujúce z C doprava prejde bez zastavenia aj vtedy, keď ho snímač nezachytí. <sub>· traffic-fsm</sub>
 
-Pri C doľava sa vozidlo z C zaradí do pruhu smerom na A. Šípka `A_S` súčasne pustí vozidlo z A do samostatného výjazdového pruhu na dolnej vetve. Pri B s odbočením z C doprava môže vozidlo z `B_R` ísť rovno doľava, vozidlo z `B_D` do výjazdového pruhu C a vozidlo z `C_S` doprava po hlavnej. Súbehy overíme podľa dráh na obr. 1 aj s modelmi áut. <sub>· traffic-fsm · model-gpio</sub>
+Pri F2 sa vozidlá z C zaradia doľava aj doprava a šípka `A_S` súčasne pustí vozidlo z A do výjazdového pruhu. Pri F3 ide `B_R` rovno, `B_D` do výjazdového pruhu C a `C_S` doprava po hlavnej. Súbehy overíme podľa dráh na obr. 1 aj s modelmi áut. <sub>· traffic-fsm · model-gpio</sub>
 
-Pre model navrhujeme 5 s zelenej v cestnej fáze, 2 s žltej a aspoň 1 s spoločnej červenej. Keď chodec čaká, po ukončení cestnej fázy a ochrannej sekunde zaradíme P. Chodci majú zelenú 5 s, po nej nasleduje spoločná červená a predtým naplánovaná cestná fáza. <sub>· traffic-fsm</sub>
+Pre model navrhujeme 5 s zelenej v každej fáze, 2 s žltej a 1 s ochranného času. Fáza trvá 5 s od chvíle, keď svietia všetky jej signály. <sub>· traffic-fsm</sub>
 
-Automat meria čas od vstupu do fázy podľa systémového času v milisekundách. Hlavná slučka priebežne číta vstupy a spracúva komunikáciu. Žltá a spoločná červená dostanú celý interval aj pri oneskorenej zmene predchádzajúcej fázy. <sub>· traffic-fsm</sub>
+<sub>traffic-fsm</sub>
+
+| Čas | Zmena pri aute stojacom na C | Fáza |
+| ---: | --- | --- |
+| 1 s | `A` a `B_R` zelená | F1 |
+| 6 s | `A` a `B_R` žltá | |
+| 8 s | `A` a `B_R` červená, `A_S` zapne | |
+| 9 s | `C` zelená | F2 |
+| 14 s | `C` žltá, `A_S` zhasne | |
+| 16 s | `C` červená, `C_S` zapne | |
+| 17 s | `B_R` a `B_D` zelená | F3 |
+| 22 s | `B_D` žltá, `C_S` zhasne, `B_R` pokračuje | |
+| 25 s | `A` zelená | F1 |
+
+Pri voľnom vjazde trvá cyklus F1 → F3 16 s a pri aute na C 24 s. Fáza chodcov F4 predĺži cyklus o 6 s, `B_R` počas nej svieti ďalej. <sub>· traffic-fsm</sub>
+
+Automat meria čas podľa systémového času v milisekundách. Hlavná slučka priebežne číta vstupy a spracúva komunikáciu. Žltá aj ochranný čas dostanú celý interval aj pri oneskorenej zmene predchádzajúceho signálu. <sub>· traffic-fsm</sub>
 
 ### Režim Control a zmena režimu
 
-Po prechode do Control sú všetky semafory na červenej a obe šípky sú zhasnuté. Obsluha môže vybrať jeden semafor, jednu šípku alebo oba semafory B spolu. Zelená trvá do platného príkazu na ukončenie alebo na zmenu režimu. Nový povel na zelenú sa prijme pri `READY=1`. Pri ochrannej červenej automat vráti `ERR CONFLICT` a obsluha môže príkaz zopakovať po skončení intervalu. <sub>· traffic-fsm · usart-control</sub>
+Po prechode do Control sú všetky semafory na červenej a obe šípky sú zhasnuté. Obsluha zapína jednotlivé signály, jednu šípku alebo oba semafory B spolu. Novú zelenú automat prijme, ak nie je v konflikte so žiadnym svietiacim signálom a ochranný čas uplynul. Takto sa dá postupne zostaviť každá fáza z Demo aj kombinácia `A_S`, `B_R` a `C_S`. Zelená trvá do platného príkazu na ukončenie alebo na zmenu režimu. <sub>· traffic-fsm · usart-control</sub>
 
-V Control ďalej čítame snímač aj tlačidlo. Príkaz `STATUS` ukáže obsadenosť vjazdu C a požiadavku chodcov. Na odbočenie z C doľava použijeme `SET C GREEN`, na odbočenie doprava `SET C_S GREEN`. Požiadavka chodcov sa vybaví pri zapnutí zelenej príkazom `SET P GREEN`. <sub>· traffic-fsm · usart-control</sub>
+V Control ďalej čítame snímač aj tlačidlo. Príkaz `STATUS` ukáže obsadenosť vjazdu C a požiadavku chodcov. Plnú zelenú pre C zapne `SET C GREEN`, samotné odbočenie doprava `SET C_S GREEN`. Požiadavky chodcov a vjazdu C sa vybavia zapnutím zelenej pre P alebo C. <sub>· traffic-fsm · usart-control</sub>
 
-Pri zmene režimu ukončíme aktívnu fázu podľa rovnakých pravidiel. Rozsvietená cestná žltá dobehne, šípky zhasnú a P prejde na červenú. Cieľový režim sa aktivuje po skončení spoločnej červenej. Ak ochranná sekunda už uplynula, režim sa prepne hneď. Čakajúcu požiadavku chodcov si automat prenesie do nového režimu. Po návrate do Demo začne od fázy A. <sub>· traffic-fsm</sub>
+Pri zmene režimu ukončíme všetky svietiace signály podľa rovnakých pravidiel. Rozsvietená cestná žltá dobehne, šípky zhasnú a P prejde na červenú. Cieľový režim sa aktivuje, keď sú všetky signály na červenej aspoň 1 s. Ak už tento čas uplynul, režim sa prepne hneď. Čakajúce požiadavky chodcov aj vjazdu C si automat prenesie do nového režimu. Po návrate do Demo začne fázou F1. <sub>· traffic-fsm</sub>
 
 ## Prehľad systému
 
@@ -129,9 +160,9 @@ Protokol navrhujeme s textovými príkazmi v ASCII a veľkými písmenami. Jedna
 | --- | --- |
 | `MODE DEMO` | Vyžiada prechod do Demo. V ustálenom režime Demo potvrdí aktuálny stav. |
 | `MODE CONTROL` | Vyžiada prechod do Control. V ustálenom režime Control potvrdí aktuálny stav. |
-| `SET <cieľ> GREEN` | Ak už všetky požadované signály svietia nazeleno, potvrdí ich stav. Pri `READY=1` spustí novú zelenú. Pri `A_S` a `C_S` rozsvieti šípku pri červenej na príslušnom semafore, pri `B` zapne obe zelené sprava. Pri inej aktívnej fáze, žltej alebo ochrannej červenej vráti `ERR CONFLICT`. |
-| `SET <cieľ> YELLOW` | Ukončí aktuálnu zelenú, ak cieľ zahŕňa práve zelený bežný cestný semafor. Na 2 s sa zapne žltá na bežných semaforoch, ktoré v tejto fáze mali zelenú. |
-| `SET <cieľ> RED` | Ak cieľ zahŕňa práve zelený signál, ukončí celú aktívnu fázu. Cestná zelená dobehne cez žltú. Šípka zhasne a P prejde priamo na červenú. Pri žltej, červenej alebo zhasnutej šípke príkaz potvrdí aktuálny stav bez zmeny časovania. |
+| `SET <cieľ> GREEN` | Ak už všetky požadované signály svietia nazeleno, potvrdí ich stav. Inak zapne signály cieľa, ak nie sú v konflikte so žiadnym svietiacim signálom a ochranný čas uplynul. Pri `A_S` a `C_S` rozsvieti šípku pri červenej na príslušnom semafore, pri `B` zapne obe zelené sprava. Inak vráti `ERR CONFLICT`. |
+| `SET <cieľ> YELLOW` | Ak cieľ zahŕňa práve zelený bežný cestný semafor, ukončí zelené signály cieľa. Bežné semafory prejdú na 2 s na žltú. Ostatné svietiace signály pokračujú. |
+| `SET <cieľ> RED` | Ukončí zelené signály cieľa. Cestná zelená dobehne cez žltú, šípka zhasne a P prejde priamo na červenú. Ostatné svietiace signály pokračujú. Pri žltej, červenej alebo zhasnutej šípke príkaz potvrdí aktuálny stav bez zmeny časovania. |
 | `STATUS` | Vráti režim, stav prepínania, pripravenosť, farby semaforov, stav šípok, obsadenosť vjazdu C a čakajúcu požiadavku chodcov. |
 
 Príkazy `SET` sa vykonávajú v režime Control po skončení prípadného prepínania. Počas prepínania je dostupný `STATUS`. Opakovanie príkazu na ten istý cieľový režim dostane `OK` a časovanie pokračuje. <sub>· traffic-fsm · usart-control</sub>
@@ -146,7 +177,7 @@ Príkazy `SET` sa vykonávajú v režime Control po skončení prípadného prep
 | `ERR BUSY` | Počas prepínania prišiel `SET` alebo požiadavka na návrat do práve opúšťaného režimu. |
 | `ERR MODE` | Používateľ poslal `SET` v režime Demo. |
 | `ERR STATE` | Príkaz na žltú sa netýka žiadneho práve zeleného bežného cestného semafora. |
-| `ERR CONFLICT` | Novú zelenú sme vyžiadali pri aktívnej fáze, žltej alebo počas ochrannej červenej. |
+| `ERR CONFLICT` | Nová zelená je v konflikte so svietiacim alebo žltým signálom, alebo ešte neuplynul ochranný čas. |
 
 Príklad odpovede na `STATUS` v Control pri aute pred stopčiarou C a čakajúcom chodcovi <sub>· usart-control</sub>
 
@@ -154,7 +185,7 @@ Príklad odpovede na `STATUS` v Control pri aute pred stopčiarou C a čakajúco
 OK MODE=CONTROL NEXT=- READY=1 A=RED A_S=OFF B_R=RED B_D=RED C=RED C_S=OFF P=RED CAR_C=1 P_REQ=1
 ```
 
-`NEXT` obsahuje cieľový režim pri prepínaní alebo `-` mimo neho. `READY=1` znamená, že Control môže prijať novú zelenú. Šípky sa vypisujú ako `ON` alebo `OFF`. `CAR_C=1` znamená obsadený vjazd a `CAR_C=0` voľný vjazd. `P_REQ=1` označuje čakajúcu požiadavku chodcov. Po zapnutí zelenej pre P má `P_REQ` hodnotu `0`. <sub>· traffic-fsm · usart-control</sub>
+`NEXT` obsahuje cieľový režim pri prepínaní alebo `-` mimo neho. `READY=1` znamená, že v Control sú všetky signály na červenej aspoň 1 s a automat prijme ľubovoľnú zelenú. Šípky sa vypisujú ako `ON` alebo `OFF`. `CAR_C=1` znamená obsadený vjazd a `CAR_C=0` voľný vjazd. `P_REQ=1` označuje čakajúcu požiadavku chodcov. Po zapnutí zelenej pre P má `P_REQ` hodnotu `0`. <sub>· traffic-fsm · usart-control</sub>
 
 ## Potrebný hardvér
 
@@ -250,7 +281,7 @@ Každý člen navrhne, naprogramuje a overí vlastný modul. K modulu odovzdá z
 
 | Člen a vetva | Návrh a implementácia | Samostatný výstup a obhajoba |
 | --- | --- | --- |
-| **Branislav Krajčovič** · `feature/traffic-fsm` | Pripraví stavový automat, kombinácie fáz, zaradenie oboch odbočení pri obsadenom vjazde C a ochranné intervaly. Doplní vybavenie požiadavky chodcov a vyhodnotenie povelov pre automat v Control. | Tabuľka prechodov, kód automatu a skúšky F1–F3. Predvedie oba súbehy pri odbočení z C a odmietnutie kolíznej požiadavky. |
+| **Branislav Krajčovič** · `feature/traffic-fsm` | Pripraví stavový automat s konfliktnou maticou, fázy F1–F4, prenos pokračujúcich signálov medzi fázami a ochranné časy. Doplní požiadavky z vjazdu C a od chodcov a vyhodnotenie povelov pre automat v Control. | Konfliktná matica, tabuľka prechodov, kód automatu a skúšky F1–F3. Predvedie plynulý prechod hlavnej cesty, fázu C po státí auta a odmietnutie kolíznej požiadavky. |
 | **Miroslav Kučera** · `feature/model-gpio` | Zhotoví model a zapojí päť RGB LED, dve šípky, tlačidlo a jeden IR snímač na C. Nakonfiguruje GPIO v CubeMX. Naprogramuje ovládač výstupov, inicializáciu a čítanie tlačidla a snímača. | Model, schéma zapojenia, kód ovládača a skúšky H1–H3. Predvedie obe šípky, samostatné semafory B a detekciu auta pri stopčiare C. |
 | **Samuel Jantošovič** · `feature/usart-control` | Navrhne formát protokolu a konfiguráciu USART2. Naprogramuje príjem a odosielanie, skladanie riadkov, kontrolu syntaxe a formátovanie odpovedí. Platné požiadavky odovzdá automatu. | Popis protokolu, kód komunikácie a skúšky U1–U3 so záznamom z terminálu. Predvedie ručné ovládanie a spracovanie chybného príkazu. |
 
@@ -258,9 +289,9 @@ Každý člen navrhne, naprogramuje a overí vlastný modul. K modulu odovzdá z
 
 | Skúška | Postup a očakávaný výsledok | Správca |
 | --- | --- | --- |
-| **F1 – Obsluha vjazdu C** | Pri voľnom vjazde overíme A → B → A. S autom pred stopčiarou overíme A → C doľava → B s odbočením z C doprava → A. Auto odoberieme počas C doľava a skontrolujeme, že plánovaná fáza s `C_S` prebehne. | <sub>traffic-fsm</sub> |
-| **F2 – Šípky, kolízie a chodci** | Overíme dvojicu `C` a `A_S` aj trojicu `B_R`, `B_D` a `C_S`. Počas zelenej A stlačíme tlačidlo. P dostane zelenú až po žltej a spoločnej červenej a všetky cestné pohyby ostanú zakázané. V Control pri zelenej `B_D` pošleme `SET A_S GREEN` a očakávame `ERR CONFLICT`. | <sub>traffic-fsm</sub> |
-| **F3 – Prepnutie režimu** | Počas B s odbočením z C doprava stlačíme tlačidlo a vyžiadame Control. Overíme zhasnutie `C_S`, žltú na oboch B a spoločnú červenú. Keď `STATUS` ukáže `MODE=CONTROL` a `READY=1`, overíme `P_REQ=1` a zapneme P. Počas zelenej pre P vyžiadame Demo. Po ochrannej sekunde sa má spustiť A. | <sub>traffic-fsm</sub> |
+| **F1 – Obsluha vjazdu C** | Pri voľnom vjazde overíme F1 → F3 → F1, nepretržitú zelenú na `B_R` a šípku `C_S` v každej F3. Auto, ktoré snímačom len prejde, F2 nevyvolá. Auto stojace 5 s vyvolá F1 → F2 → F3 → F1 a `C_S` naskočí hneď po žltej na `C`. Auto, ktoré po zápise požiadavky odbočí doprava po šípke, požiadavku zruší. | <sub>traffic-fsm</sub> |
+| **F2 – Šípky, kolízie a chodci** | Počas F1 stlačíme tlačidlo. Po žltej na `A` a ochrannej sekunde dostane P zelenú spolu s `B_R`, ostatné signály sú na červenej. V Control pri zelenej `B_D` pošleme `SET A_S GREEN` a `SET P GREEN` a očakávame `ERR CONFLICT`. Príkaz `SET C_S GREEN` prejde a pridá šípku k `B_D`. | <sub>traffic-fsm</sub> |
+| **F3 – Prepnutie režimu** | Počas F3 stlačíme tlačidlo a vyžiadame Control. Overíme zhasnutie `C_S`, žltú na oboch B a spoločnú červenú. Keď `STATUS` ukáže `MODE=CONTROL` a `READY=1`, overíme `P_REQ=1` a zapneme P. Počas zelenej pre P vyžiadame Demo. Po ochrannej sekunde sa má spustiť F1. | <sub>traffic-fsm</sub> |
 | **H1 – Mapa LED** | Na stole zapneme postupne 12 výstupov, vždy jeden. Overíme priradenie kanálov a šípok. Na každom cestnom semafore zapneme R aj G a skontrolujeme, či sa žltá dá odlíšiť od červenej a zelenej. | <sub>model-gpio</sub> |
 | **H2 – Inicializácia a prechod** | Resetujeme dosku počas aktívnej fázy a skontrolujeme, či prvý rozsvietený stav tvorí päť červených. Pri zmene fázy overíme žltú a spoločnú červenú pred rozsvietením ďalších zelených. | <sub>model-gpio</sub> |
 | **H3 – Čítanie vstupov** | Postavíme auto pred stopčiaru C, overíme `CAR_C=1` počas státia a `CAR_C=0` po odchode. Prejazd po výjazdovom pruhu má ponechať `CAR_C=0`. Pri podržaní tlačidla sa zaznamená jedno stlačenie, ďalšie až po uvoľnení a novom stlačení. | <sub>model-gpio</sub> |
@@ -270,8 +301,8 @@ Každý člen navrhne, naprogramuje a overí vlastný modul. K modulu odovzdá z
 
 ### Spoločná skúška na hotovom modeli
 
-1. Po resete skontrolujeme spoločnú červenú a cyklus A → B pri voľnom C. Pristavením auta na C vyvoláme obe fázy s odbočením z C. Povolené pohyby prejdeme s modelmi áut po vyznačených dráhach a skontrolujeme odstupy. Z videa určíme trvanie zelenej, žltej a spoločnej červenej. <sub>· traffic-fsm · model-gpio</sub>
-2. Počas B s odbočením z C doprava stlačíme tlačidlo. Po zhasnutí `C_S`, žltej na oboch B a spoločnej červenej dostane P zelenú. Overíme, že všetky cestné semafory svietia načerveno, obe šípky sú zhasnuté a po ukončení P sa pokračuje fázou A. <sub>· traffic-fsm · model-gpio</sub>
+1. Po resete skontrolujeme spoločnú červenú a cyklus F1 → F3 pri voľnom C, počas ktorého `B_R` nezhasne. Auto pristavíme na C a po 5 s státia sa zaradí F2. Povolené pohyby prejdeme s modelmi áut po vyznačených dráhach a skontrolujeme odstupy. Z videa určíme trvanie zelenej, žltej a spoločnej červenej. <sub>· traffic-fsm · model-gpio</sub>
+2. Počas F3 stlačíme tlačidlo. Po zhasnutí `C_S`, žltej na `B_D` a ochrannej sekunde dostane P zelenú. Overíme, že `B_R` svieti ďalej, ostatné semafory sú na červenej, obe šípky sú zhasnuté a po ukončení P sa pokračuje fázou F1. <sub>· traffic-fsm · model-gpio</sub>
 3. V Control po `READY=1` zadáme `SET A_S GREEN`. Na A má svietiť červená spolu so šípkou. Príkaz `SET B_D GREEN` musí vrátiť `ERR CONFLICT`. Po `SET A_S RED` a skončení spoločnej červenej zopakujeme príkaz pre `B_D` a overíme `OK` aj stav na modeli. <sub>· traffic-fsm · usart-control</sub>
 
 K vyhodnoteniu priložíme namerané časy a záznam z terminálu s príkazmi a odpoveďami. <sub>· traffic-fsm · model-gpio · usart-control</sub>

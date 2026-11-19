@@ -13,6 +13,11 @@
  * zaregistrovanu callback funkciu, ktora dostane stav vsetkych siedmich
  * signalov (TrafficSignals).
  *
+ * Kazdy signal ma vlastny stav. Novy signal sa zapne az vtedy, ked vsetky
+ * signaly, s ktorymi je v konflikte (konfliktna matica v traffic_fsm.c),
+ * svietia nacerveno aspon TRAFFIC_ALL_RED_MS. Signal, ktory pokracuje aj
+ * v dalsej faze, pri zmene fazy nezhasne.
+ *
  * Pouzitie v hlavnej slucke:
  *   TrafficFsm_RegisterOutputCallback(apply_signals);  // pred inicializaciou
  *   TrafficFsm_Init(HAL_GetTick());
@@ -36,7 +41,8 @@
 /* Casovanie [ms] */
 #define TRAFFIC_GREEN_MS        5000U   /* zelena v rezime Demo (cestna faza aj chodci) */
 #define TRAFFIC_YELLOW_MS       2000U   /* cestna zlta */
-#define TRAFFIC_ALL_RED_MS      1000U   /* najkratsia spolocna cervena pred dalsou zelenou */
+#define TRAFFIC_ALL_RED_MS      1000U   /* ochranny cas: konfliktny signal musi byt cerveny aspon tolko */
+#define TRAFFIC_CAR_WAIT_MS     5000U   /* auto musi na C stat tolko, aby sa zapisala poziadavka na fazu C */
 
 /* Rezim automatu */
 typedef enum
@@ -46,7 +52,9 @@ typedef enum
     TRAFFIC_MODE_NONE                   /* "ziadny cielovy rezim" (NEXT=-) */
 } TrafficMode;
 
-/* Farba bezneho semafora (A, B_R, B_D, C, P). Pre P iba RED a GREEN. */
+/* Farba bezneho semafora (A, B_R, B_D, C, P). Pre P iba RED a GREEN.
+ * A a C pri zelenej pustaju oba smery. Sipky A_S a C_S svietia iba pri cervenej
+ * na prislusnom beznom semafore. */
 typedef enum
 {
     TRAFFIC_COLOR_RED = 0,
@@ -75,7 +83,7 @@ typedef enum
     TRAFFIC_RESULT_ERR_BUSY,            /* prebieha prepinanie rezimu */
     TRAFFIC_RESULT_ERR_MODE,            /* SET v rezime Demo */
     TRAFFIC_RESULT_ERR_STATE,           /* zlta pre ciel bez zeleneho bezneho cestneho semafora */
-    TRAFFIC_RESULT_ERR_CONFLICT,        /* nova zelena pri aktivnej faze, zltej alebo ochrannej cervenej */
+    TRAFFIC_RESULT_ERR_CONFLICT,        /* nova zelena v konflikte so svietiacim signalom alebo pocas ochranneho casu */
     TRAFFIC_RESULT_ERR_PARAM            /* neplatny parameter (USART ho zachyti skor ako ERR SYNTAX) */
 } TrafficResult;
 
@@ -91,14 +99,15 @@ typedef struct
     bool c_s_on;                        /* zelena sipka C_S */
 } TrafficSignals;
 
-/* Udaje pre prikaz STATUS */
+/* Udaje pre prikaz STATUS (farby su logicke, pocas zltej YELLOW) */
 typedef struct
 {
     TrafficMode mode;                   /* aktivny rezim */
     TrafficMode next_mode;              /* cielovy rezim pocas prepinania, inak TRAFFIC_MODE_NONE */
-    bool ready;                         /* Control moze prijat novu zelenu */
+    bool ready;                         /* Control: vsetko cervene aspon 1 s, prijme lubovolnu zelenu */
     TrafficSignals signals;             /* aktualne svetla */
-    bool car_c;                         /* obsadeny vjazd C (posledna hodnota z Update) */
+    bool car_c;                         /* auto pred snimacom C (posledna hodnota z Update) */
+    bool c_req;                         /* auto stalo na C aspon 5 s, caka faza C */
     bool p_req;                         /* caka poziadavka chodcov */
 } TrafficFsmStatus;
 
@@ -108,7 +117,7 @@ typedef void (*TrafficOutputCallback)(const TrafficSignals *signals);
 /* Registracia callbacku. Volat pred TrafficFsm_Init. NULL = bez callbacku. */
 void TrafficFsm_RegisterOutputCallback(TrafficOutputCallback callback);
 
-/* Inicializacia: spolocna cervena, rezim Demo, po 1 s zacne faza A. Vymaze poziadavku chodcov. */
+/* Inicializacia: spolocna cervena, rezim Demo, po 1 s zacne faza F1. Vymaze poziadavky C aj chodcov. */
 void TrafficFsm_Init(uint32_t now_ms);
 
 /*
