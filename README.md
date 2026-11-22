@@ -17,6 +17,7 @@ Na obhajobe ukážeme cyklus Demo pri voľnom aj obsadenom vjazde C. Predvedieme
 <sub>traffic-fsm · model-gpio · usart-control</sub>
 
 - [Rozsah projektu](#rozsah-projektu)
+  - [Automatické riadenie (DEMO)](#automatické-riadenie-demo)
 - [Prehľad systému](#prehľad-systému)
 - [Komunikačný protokol](#komunikačný-protokol)
 - [Potrebný hardvér](#potrebný-hardvér)
@@ -82,7 +83,7 @@ Auto, ktoré snímačom na C len prejde, fázu C nevyvolá. Požiadavku `C_REQ` 
 
 Jeden IR snímač pri stopčiare na C sleduje obsadenosť spoločného vjazdu. Jeho dosah overíme so stojacim autom aj pri prejazde v susednom výjazdovom pruhu. <sub>· model-gpio</sub>
 
-### Režim Demo
+### Automatické riadenie (DEMO)
 
 V tabuľke znamená **1** zelenú alebo svietiacu šípku. **0** znamená červenú alebo zhasnutú šípku. Žltá patrí do prechodu medzi fázami. <sub>· traffic-fsm</sub>
 
