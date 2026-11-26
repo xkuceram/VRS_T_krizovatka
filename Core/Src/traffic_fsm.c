@@ -407,20 +407,24 @@ static void step(void)
     publish();
 }
 
-/* Poziadavka z vjazdu C: auto musi stat pred snimacom aspon TRAFFIC_CAR_WAIT_MS */
+/*
+ * Poziadavka z vjazdu C: auto musi stat pred snimacom aspon TRAFFIC_CAR_WAIT_MS
+ * pri nezelenej C. Zrusi ju iba odchod auta (prechod snimaca z obsadeneho na
+ * volny) pocas svietiacej sipky C_S - auto odbocilo doprava. Ak auto odislo
+ * skor a snimac je pri zapnuti sipky uz volny, poziadavka ostava.
+ */
 static void update_car_request(bool car_c)
 {
-    if (!car_c)
+    const bool car_left = fsm.car_c && !car_c;   /* obsadeny -> volny */
+
+    if (car_left && fsm.c_req && fsm.sig[S_CS] == SIG_GREEN)
     {
-        if (fsm.c_req && fsm.sig[S_CS] == SIG_GREEN)
-        {
-            fsm.c_req = false;      /* auto odbocilo doprava po sipke */
-        }
-        fsm.car_waiting = false;
+        fsm.c_req = false;          /* auto odbocilo doprava po sipke */
     }
-    else if (fsm.sig[S_C] == SIG_GREEN)
+
+    if (!car_c || fsm.sig[S_C] == SIG_GREEN)
     {
-        fsm.car_waiting = false;    /* pri zelenej na C auta prechadzaju */
+        fsm.car_waiting = false;    /* volny vjazd alebo pri zelenej C auta prechadzaju */
     }
     else if (!fsm.car_waiting)
     {

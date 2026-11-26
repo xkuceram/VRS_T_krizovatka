@@ -79,7 +79,7 @@ We will place the button beside crossing P. We will debounce the input so that o
 
 The controller serves the request when P turns green. A press during the pedestrian green is covered by the current phase. A reset clears any pending request. <sub>· traffic-fsm</sub>
 
-A car that only passes the sensor on C does not trigger phase C. The controller records request `C_REQ` only after a car has stood in front of the sensor for 5 s without interruption while `C` is not green. The request remains until `C` turns green. If the sensor clears while arrow `C_S` is lit, the car has turned right and the request is cancelled. <sub>· traffic-fsm</sub>
+A car that only passes the sensor on C does not trigger phase C. The controller records request `C_REQ` only after a car has stood in front of the sensor for 5 s without interruption while `C` is not green. The request remains until `C` turns green. Only a car leaving while arrow `C_S` is lit cancels the request, that is, the sensor changing from occupied to clear while the arrow is on. The car has then turned right. If the car left before the arrow turned on and the sensor is already clear when it lights, the request remains and F2 is scheduled. <sub>· traffic-fsm</sub>
 
 A single IR sensor at the stop line on C monitors the shared approach lane. We will check its detection range with a stationary car and with a car passing in the adjacent exit lane. <sub>· model-gpio</sub>
 
@@ -96,6 +96,8 @@ In the table, **1** means green or an illuminated arrow. **0** means red or an a
 | F3 – B and right-turn arrow from C | 0 | 0 | 1 | 1 | 0 | 1 | 0 |
 | F4 – Pedestrians and B straight | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
 | All red | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+All red occurs only for 1 s after a reset and during a mode change. When the phase changes in Demo, a conflicting direction gets 2 s of yellow and at least 1 s of red before a conflicting signal turns green. A non-conflicting direction stays green, so all seven signals are never red together between phases. <sub>· traffic-fsm</sub>
 
 The phases run in the order F1 → [F4] → [F2] → F3 → [F4] → F1. F4 is inserted when a pedestrian is waiting and F2 when `C_REQ` is set. Without requests, only F1 and F3 alternate. After startup and after returning to Demo, the controller starts with F1. <sub>· traffic-fsm</sub>
 
@@ -119,7 +121,7 @@ For the model, we propose 5 s of green in every phase, 2 s of yellow and a 1 s c
 | 22 s | `B_D` yellow, `C_S` off, `B_R` continues | |
 | 25 s | `A` green | F1 |
 
-With approach C clear, the F1 → F3 cycle takes 16 s, and with a car on C it takes 24 s. The pedestrian phase F4 adds 6 s to the cycle while `B_R` stays green. <sub>· traffic-fsm</sub>
+With approach C clear, the F1 → F3 cycle takes 16 s, and with a car on C it takes 24 s. The pedestrian phase F4 adds 6 s to the cycle while `B_R` stays green. If F2 follows F4, it adds 8 s, because `B_R` must go through yellow before `C` turns green. <sub>· traffic-fsm</sub>
 
 The controller measures time using the system time in milliseconds. The main loop continues to read inputs and handle serial communication. Yellow and clearance intervals run for their full duration even if the preceding signal changes late. <sub>· traffic-fsm</sub>
 
@@ -290,11 +292,11 @@ Each team member will design, program and test their own module. They will submi
 
 | Test | Procedure and expected result | Owner |
 | --- | --- | --- |
-| **F1 – Servicing approach C** | With the approach clear, verify F1 → F3 → F1, a continuous green on `B_R` and arrow `C_S` in every F3. A car that only passes the sensor does not trigger F2. A car waiting 5 s triggers F1 → F2 → F3 → F1, and `C_S` lights right after the yellow on `C`. A car that turns right on the arrow after its request was recorded cancels the request. | <sub>traffic-fsm</sub> |
+| **F1 – Servicing approach C** | With the approach clear, verify F1 → F3 → F1, a continuous green on `B_R` and arrow `C_S` in every F3. A car that only passes the sensor does not trigger F2. A car waiting 5 s triggers F1 → F2 → F3 → F1, and `C_S` lights right after the yellow on `C`. A car that leaves while the arrow is lit after its request was recorded cancels the request. A car that leaves before the arrow turns on does not cancel it, and F2 follows the next F1. | <sub>traffic-fsm</sub> |
 | **F2 – Arrows, conflicts and pedestrians** | Press the button during F1. After the yellow on `A` and the clearance second, P turns green together with `B_R` and all other signals are red. In Control with `B_D` green, send `SET A_S GREEN` and `SET P GREEN` and expect `ERR CONFLICT`. `SET C_S GREEN` is accepted and adds the arrow to `B_D`. | <sub>traffic-fsm</sub> |
 | **F3 – Mode change** | During F3, press the button and request Control. Verify that `C_S` turns off, both B signals turn yellow, and all red follows. When `STATUS` shows `MODE=CONTROL` and `READY=1`, check `P_REQ=1` and turn P green. Request Demo while P is green. F1 should start after the one-second clearance interval. | <sub>traffic-fsm</sub> |
 | **H1 – LED mapping** | On the workbench, turn on each of the 12 outputs individually. Verify the channels and arrows. For each vehicle signal, turn on R and G together and check that yellow is distinguishable from red and green. | <sub>model-gpio</sub> |
-| **H2 – Initialisation and transition** | Reset the board during an active phase and check that all five signals first light red. When the phase changes, verify yellow and all red before the next green lights. | <sub>model-gpio</sub> |
+| **H2 – Initialisation and transition** | Reset the board during an active phase and check that all five signals first light red for 1 s. Verify all red on every signal after a reset and when switching from Demo to Control. On F1 → F3 (approach C clear), verify 2 s of yellow and 1 s of red on `A` before `B_D` and `C_S` turn on, while `B_R` stays green throughout. On F1 → F2 (car on C), verify that `A_S` lights right after the yellow on `A`, and `C` only 1 s after `A` and `B_R` turn red. | <sub>model-gpio · traffic-fsm</sub> |
 | **H3 – Reading inputs** | Put a car at the stop line on C. Verify `CAR_C=1` while it is stopped and `CAR_C=0` after it leaves. A car passing in the exit lane should leave `CAR_C=0`. Holding the button should register a single press, with another press registered after release and a new press. | <sub>model-gpio</sub> |
 | **U1 – Control and status** | When `READY=1`, try `SET B_R GREEN`, `SET B_D GREEN`, `SET C GREEN` and `SET C_S GREEN`. Before requesting each new green, end the previous phase and wait for `READY=1`. Send `STATUS` with both `LF` and `CRLF` and verify `CAR_C` and `P_REQ`. | <sub>usart-control</sub> |
 | **U2 – Invalid command and receiver recovery** | In steady Control mode, send `SET X GREEN`, `SET A_S YELLOW` and a 33-character line. Expect `ERR SYNTAX`, `ERR STATE` and `ERR LENGTH`. Check that the following `STATUS` command is processed normally. | <sub>usart-control</sub> |
@@ -302,7 +304,7 @@ Each team member will design, program and test their own module. They will submi
 
 ### Integrated test on the assembled model
 
-1. After a reset, check all red and the F1 → F3 cycle with approach C clear, during which `B_R` stays green. Place a car at the stop line on C; after 5 s of waiting, F2 is scheduled. Guide the model cars along the marked permitted paths and check the clearance between them. Use video to measure the green, yellow and all-red intervals. <sub>· traffic-fsm · model-gpio</sub>
+1. After a reset, check all red and the F1 → F3 cycle with approach C clear, during which `B_R` stays green. Place a car at the stop line on C; after 5 s of waiting, F2 is scheduled. Guide the model cars along the marked permitted paths and check the clearance between them. Use video to measure the green and yellow intervals and the clearance time before a conflicting direction turns green. <sub>· traffic-fsm · model-gpio</sub>
 2. During F3, press the button. P turns green after `C_S` goes off, `B_D` turns yellow and the clearance second ends. Verify that `B_R` stays green, the other signals are red, both arrows are off, and the controller continues with F1 after P. <sub>· traffic-fsm · model-gpio</sub>
 3. In Control with `READY=1`, send `SET A_S GREEN`. A should show red with the arrow on. `SET B_D GREEN` should return `ERR CONFLICT`. Send `SET A_S RED`, wait for the all-red clearance interval to end, then repeat the command for `B_D` and check `OK` and the signal on the model. <sub>· traffic-fsm · usart-control</sub>
 
