@@ -205,6 +205,38 @@ Auto stojí na C od začiatku:
 25 s  A zelená                         F1 (cyklus 24 s)
 ```
 
+Chodec počas F1 pri voľnom C (F4 predĺži cyklus o 6 s):
+
+```
+ 9 s  P zelená, B_R pokračuje           F4
+14 s  P červená (bez žltej)
+15 s  B_D, C_S zapnú                    F3
+23 s  A zelená                         F1
+```
+
+Chodec počas F1 a auto na C (F4 pred F2 predĺži cyklus o 8 s, lebo `B_R` musí pred `C` prejsť žltou):
+
+```
+ 9 s  P zelená, B_R pokračuje           F4
+14 s  P červená, B_R žltá
+15 s  A_S zapne (1 s po P)
+16 s  B_R červená
+17 s  C zelená                         F2
+33 s  A zelená                         F1
+```
+
+**Kde nastane spoločná červená.** Všetkých sedem signálov svieti naraz načerveno iba 1 s po resete a pri zmene režimu (napríklad Demo → Control počas F3: 2 s žltá na oboch B, potom spoločná červená až do aktivácie Control). Pri zmene fázy v Demo spoločná červená nenastáva:
+
+| Prechod | Konfliktný smer (žltá 2 s + aspoň 1 s červenej) | Nekolízny smer pokračuje |
+| --- | --- | --- |
+| F1 → F3 | `A` pred `B_D` a `C_S` | `B_R` |
+| F3 → F1 | `B_D` a `C_S` (šípka zhasne hneď) pred `A` | `B_R` |
+| F1 → F2 | `A` a `B_R` pred `C` | odbočenie z A dole: `A_S` naskočí hneď po žltej `A` |
+| F2 → F3 | `C` a `A_S` (šípka zhasne hneď) pred `B_R` a `B_D` | odbočenie z C doprava: `C_S` naskočí hneď po žltej `C` |
+| F1 / F3 → F4 | `A` alebo `B_D` a `C_S` pred `P` | `B_R` |
+| F4 → F1 / F3 | `P` (bez žltej) pred `A` alebo `B_D` a `C_S` | `B_R` |
+| F4 → F2 | `P` a `B_R` pred `C` | – |
+
 Porovnanie s pôvodnou tabuľkou fáz:
 
 | | Pôvodne | Teraz |
@@ -218,7 +250,7 @@ Porovnanie s pôvodnou tabuľkou fáz:
 ### Požiadavky
 
 - **Chodci:** stlačenie nastaví `p_req`. Stlačenie počas zelenej pre P patrí do prebiehajúcej fázy. Požiadavka sa vymaže pri zapnutí zelenej pre P a pri inicializácii.
-- **Vjazd C:** keď je snímač obsadený a `C` nesvieti nazeleno, beží časovač. Po 5 s nepretržitého státia sa zapíše `c_req`. Uvoľnenie snímača časovač vynuluje. Ak sa snímač uvoľní počas svietiacej šípky `C_S`, auto odbočilo doprava a `c_req` sa zruší. Pri červenej auto odísť nemôže, preto sa požiadavka nezruší. Vymaže sa pri zapnutí zelenej pre `C`.
+- **Vjazd C:** keď je snímač obsadený a `C` nesvieti nazeleno, beží časovač. Po 5 s nepretržitého státia sa zapíše `c_req`. Uvoľnenie snímača časovač vynuluje. Požiadavku zruší iba **prechod snímača z obsadeného na voľný počas svietiacej šípky `C_S`**: auto odbočilo doprava. Automat si preto pamätá predchádzajúcu hodnotu snímača (`car_c`). Ak auto odišlo ešte pred zapnutím šípky a snímač je pri jej zapnutí už voľný, nenastane žiadny prechod a požiadavka ostáva. Inak sa `c_req` vymaže pri zapnutí zelenej pre `C`.
 
 ## Režim Control
 
@@ -248,23 +280,23 @@ Po aktivácii Control sú všetky semafory na červenej a automat čaká na prí
 
 ## Overenie
 
-Testy na PC: `cd tests && make`. Testy hlásia **65 245 kontrol, 0 chýb**. Priebeh svetiel je v `tests/vysledky_F1_F3.txt`.
+Testy na PC: `cd tests && make`. Testy hlásia **2 487 kontrol, 0 chýb** (kontrola jednej zmeny svetiel sa počíta ako jedna položka, preto je číslo menšie ako v predošlej verzii testov). Priebeh svetiel je v `tests/vysledky_F1_F3.txt`.
 
-Test obsahuje vlastnú kópiu konfliktnej matice, zapísanú nezávisle od automatu. Pri každej zmene svetiel kontroluje:
+Test obsahuje vlastnú kópiu konfliktnej matice, zapísanú nezávisle od automatu. Funkcia `check_change` porovná každú zmenu svetiel so **stavom pred zmenou** a kontroluje:
 
 - žiadne dva konfliktné signály nesvietia súčasne (zelená ani žltá),
 - šípka `A_S` / `C_S` svieti iba pri červenej na `A` / `C`,
-- signál sa zapne, až keď on sám aj všetky konfliktné signály svietia načerveno aspoň 1 s,
+- signál sa zapne, až keď on sám aj všetky konfliktné signály svietia načerveno aspoň 1 s **už pred touto zmenou**. Konfliktný signál, ktorý zhasne v tej istej milisekunde, v ktorej sa nový zapne, je porušenie (0 ms ochrany),
 - žltá trvá celé 2 s, `P` nemá žltú a bežný semafor nezhasne zo zelenej bez žltej.
 
 | Skúška | Čo test overuje |
 | --- | --- |
-| **F1 – Obsluha vjazdu C** | Voľný vjazd: F1 → F3 → F1, `B_R` nezelená iba prvú sekundu po štarte. Auto stojí: celá časová os F1 → F2 → F3 → F1 vrátane `A_S` a `C_S` hneď po žltej. Auto len prejde (2 s): bez F2. Hranica 5 s: 4,999 s nestačí. Auto po zápise požiadavky odbočí po šípke: požiadavka sa zruší. Auto ostane stáť: F2 po najbližšej F1. |
+| **F1 – Obsluha vjazdu C** | Voľný vjazd: F1 → F3 → F1, `B_R` nezelená iba prvú sekundu po štarte. Auto stojí: celá časová os F1 → F2 → F3 → F1 vrátane `A_S` a `C_S` hneď po žltej. Auto len prejde (2 s): bez F2. Hranica 5 s: 4,999 s nestačí. Auto po zápise požiadavky odíde počas šípky: požiadavka sa zruší. Auto odíde ešte pred zapnutím šípky: požiadavka ostane aj po celej šípke a F2 príde po najbližšej F1. Auto príde počas šípky a hneď odíde: nič sa nezapíše. Auto ostane stáť: F2 po najbližšej F1. |
 | **F2 – Šípky, kolízie a chodci** | Chodec počas F1 aj F3, `B_R` počas chodcov nezastaví. Chodec a auto: F1 → F4 → F2 → F3. Stlačenie počas zelenej P sa ignoruje. Control: `A_S` aj `P` pri `B_D` → `ERR CONFLICT`, `C_S` k `B_D` → `OK`, ručne zostavená F3 aj kombinácia `A_S` + `B_R` + `C_S`, ochranný čas presne 1 s, kroky spoločnej skúšky č. 3, `C_S` pri zelenej `C` → `ERR CONFLICT`, `A` pri chodcoch → `ERR CONFLICT`. |
 | **F3 – Prepnutie režimu** | Počas F3 tlačidlo a `MODE CONTROL`: `C_S` zhasne, oba B na žltú, spoločná červená, potom `MODE=CONTROL READY=1 P_REQ=1`. `ERR BUSY` počas prepínania. `SET P GREEN`, potom `MODE DEMO`: P rovno na červenú, po 1 s F1. Okamžité prepnutie. Prenos `C_REQ` a `P_REQ` do Demo. |
-| Ďalšie | Pretečenie `uint32_t` času, beh bez callbacku a dvojhodinová náhodná simulácia so vstupmi aj príkazmi. |
+| Ďalšie | Samotest kontroly ochranného času: konfliktný signál zhasne v tej istej ms (0 ms), červený 999 ms a 1 000 ms pred zapnutím, signál sám červený 999 ms, šípka hneď po žltej svojho semafora a šípka pri zelenej. Pretečenie `uint32_t` času, beh bez callbacku a dvojhodinová náhodná simulácia so vstupmi aj príkazmi. |
 
-Testy sme overili aj opačne: v automate sme schválne vytvorili 8 chýb (chýbajúci konflikt v matici, šípka pri zelenej, bez ochranného času, A pri chodcoch, nezrušená požiadavka C, snímač 3 s, bez prenosu zelenej). Testy zachytili každú z nich.
+Testy sme overili aj opačne: v automate sme schválne vytvorili 10 chýb (dva chýbajúce konflikty v matici, šípka pri zelenej, bez ochranného času, zapnutie v tej istej ms ako zhasnutie konfliktného signálu, A pri chodcoch, nezrušená požiadavka C, rušenie požiadavky C bez odchodu auta, snímač 3 s, bez prenosu zelenej). Testy zachytili každú z nich.
 
 ## Poznámky k spoločným súborom
 

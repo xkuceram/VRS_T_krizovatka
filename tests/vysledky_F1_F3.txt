@@ -2,6 +2,7 @@ Vysledky skusok F1-F3 stavoveho automatu (tests/test_traffic_fsm.c, make)
 Simulovany cas, krok hlavnej slucky 1 ms. Zapisuje sa kazda zmena svetiel.
 G = zelena / svietiaca sipka, Y = zlta, . = cervena / zhasnuta sipka.
 
+Samotest kontroly ochranneho casu voci stavu pred zmenou
 F1a - volny vjazd C: F1 -> F3 -> F1, B_R ma zelenu nepretrzite
   t=   0.0 s  A=. A_S=. B_R=. B_D=. C=. C_S=. P=.
   t=   1.0 s  A=G A_S=. B_R=G B_D=. C=. C_S=. P=.
@@ -32,6 +33,8 @@ F1b - auto stoji na C: F1 -> F2 (C oba smery + A_S) -> F3 -> F1
 F1c - auto snimacom len prejde (2 s): faza C sa nezaradi
 F1d - hranica 5 s: 4,999 s nestaci, 5 s ano
 F1e - auto pocka 5 s a odboci doprava po sipke C_S: poziadavka sa zrusi
+F1e2 - auto odide este pred sipkou: pri zapnuti C_S je snimac volny, poziadavka ostava
+F1e3 - auto pride az pocas sipky a hned odide: bez poziadavky nic nerusi
 F1f - auto ostane stat: F2 pride po najblizsej F1
 F2a - chodec pocas F1: F1 -> F4 (P + B_R) -> F3 -> F1, B_R nezastavi
   t=   0.0 s  A=. A_S=. B_R=. B_D=. C=. C_S=. P=.
@@ -82,4 +85,4 @@ Automat bez callbacku (NULL)
 Nahodna simulacia 2 hodiny (vstupy aj prikazy), kontrola matice pri kazdej zmene
   zmien svetiel: 2168, zapnutych signalov: 1136
 
-65245 kontrol, 0 chyb -> VSETKY TESTY PRESLI
+2487 kontrol, 0 chyb -> VSETKY TESTY PRESLI

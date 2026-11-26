@@ -120,6 +120,104 @@ static void print_state(void)
     printf("\n");
 }
 
+/*
+ * Kontrola jednej zmeny svetiel voci stavu PRED zmenou.
+ *   old, old_since - stav a cas poslednej zmeny kazdeho signalu pred zmenou
+ *   ns             - novy stav, t_now - cas zmeny
+ * Vrati pocet porusenych pravidiel. Pri report=true ich vypise.
+ *
+ * Signal, ktory sa zapina, musi byt pred zmenou cerveny aspon 1 s a kazdy
+ * konfliktny signal tiez. Konfliktny signal, ktory svietil a zhasol v tej
+ * istej milisekunde, je porusenie (0 ms ochrany).
+ */
+static int check_change(const int old[NSIG], const uint32_t old_since[NSIG],
+                        const int ns[NSIG], uint32_t t_now, bool report)
+{
+    int bad = 0;
+
+#define VIOLATION(...)                                                      \
+    do {                                                                    \
+        bad++;                                                              \
+        if (report) {                                                       \
+            printf("  CHYBA (t=%lu ms): ", (unsigned long)(t_now - t0));    \
+            printf(__VA_ARGS__);                                            \
+            printf("\n");                                                   \
+        }                                                                   \
+    } while (0)
+
+    if (ns[P] == 2)
+    {
+        VIOLATION("P nema zltu");
+    }
+
+    for (int s = 0; s < NSIG; s++)
+    {
+        if (ns[s] == old[s])
+        {
+            continue;
+        }
+        if (ns[s] == 1)
+        {
+            /* zapnutie: sam aj konfliktne signaly cervene aspon 1 s pred touto zmenou */
+            if (old[s] != 0 || t_now - old_since[s] < TRAFFIC_ALL_RED_MS)
+            {
+                VIOLATION("%s sa zapol bez 1 s cervenej (%lu ms)", sig_name[s],
+                          (unsigned long)(t_now - old_since[s]));
+            }
+            for (int t = 0; t < NSIG; t++)
+            {
+                if ((conflict[s] & M(t)) != 0U &&
+                    (old[t] != 0 || ns[t] != 0 || t_now - old_since[t] < TRAFFIC_ALL_RED_MS))
+                {
+                    VIOLATION("%s sa zapol %lu ms po konfliktnom %s (stav pred zmenou %d)",
+                              sig_name[s], (unsigned long)(old[t] != 0 ? 0U : t_now - old_since[t]),
+                              sig_name[t], old[t]);
+                }
+            }
+        }
+        else if (ns[s] == 2)
+        {
+            if (old[s] != 1)
+            {
+                VIOLATION("zlta %s iba po zelenej", sig_name[s]);
+            }
+        }
+        else if (old[s] == 2)
+        {
+            if (t_now - old_since[s] < TRAFFIC_YELLOW_MS)
+            {
+                VIOLATION("zlta %s trvala iba %lu ms", sig_name[s], (unsigned long)(t_now - old_since[s]));
+            }
+        }
+        else if (s != AS && s != CS && s != P)
+        {
+            VIOLATION("%s zhasol zo zelenej bez zltej", sig_name[s]);
+        }
+    }
+
+    /* nikdy dva konfliktne signaly naraz, sipka iba pri cervenej na svojom semafore */
+    for (int s = 0; s < NSIG; s++)
+    {
+        for (int t = s + 1; t < NSIG; t++)
+        {
+            if ((conflict[s] & M(t)) != 0U && ns[s] != 0 && ns[t] != 0)
+            {
+                VIOLATION("konflikt %s a %s", sig_name[s], sig_name[t]);
+            }
+        }
+    }
+    if (ns[AS] != 0 && ns[A] != 0)
+    {
+        VIOLATION("sipka A_S iba pri cervenej na A");
+    }
+    if (ns[CS] != 0 && ns[C] != 0)
+    {
+        VIOLATION("sipka C_S iba pri cervenej na C");
+    }
+#undef VIOLATION
+    return bad;
+}
+
 /* Callback vystupov - kontrola bezpecnosti pri kazdej zmene */
 static void on_output(const TrafficSignals *sig)
 {
@@ -133,59 +231,21 @@ static void on_output(const TrafficSignals *sig)
     ns[P] = to_state(sig->p);
 
     changes++;
-    CHECK(ns[P] != 2, "P nema zltu");
+    const int bad = check_change(state, since, ns, now, true);
+    CHECK(bad == 0, "%d porusenych pravidiel pri zmene svetiel", bad);
 
     for (int s = 0; s < NSIG; s++)
     {
-        if (ns[s] == state[s])
+        if (ns[s] != state[s])
         {
-            continue;
-        }
-        if (ns[s] == 1)
-        {
-            /* zapnutie: sam aj konfliktne signaly cervene aspon 1 s */
-            CHECK(state[s] == 0 && now - since[s] >= TRAFFIC_ALL_RED_MS,
-                  "%s sa zapol bez 1 s cervenej", sig_name[s]);
-            for (int t = 0; t < NSIG; t++)
+            if (ns[s] == 1)
             {
-                if ((conflict[s] & M(t)) != 0U)
-                {
-                    CHECK(ns[t] == 0 && (state[t] != 0 || now - since[t] >= TRAFFIC_ALL_RED_MS),
-                          "%s sa zapol skor ako 1 s po konfliktnom %s", sig_name[s], sig_name[t]);
-                }
+                greens_started++;
             }
-            greens_started++;
-        }
-        else if (ns[s] == 2)
-        {
-            CHECK(state[s] == 1, "zlta %s iba po zelenej", sig_name[s]);
-        }
-        else if (state[s] == 2)
-        {
-            CHECK(now - since[s] >= TRAFFIC_YELLOW_MS, "zlta %s trvala iba %lu ms",
-                  sig_name[s], (unsigned long)(now - since[s]));
-        }
-        else
-        {
-            CHECK(s == AS || s == CS || s == P, "%s zhasol zo zelenej bez zltej", sig_name[s]);
-        }
-        state[s] = ns[s];
-        since[s] = now;
-    }
-
-    /* nikdy dva konfliktne signaly naraz, sipka iba pri cervenej na svojom semafore */
-    for (int s = 0; s < NSIG; s++)
-    {
-        for (int t = 0; t < NSIG; t++)
-        {
-            if ((conflict[s] & M(t)) != 0U)
-            {
-                CHECK(!(state[s] != 0 && state[t] != 0), "konflikt %s a %s", sig_name[s], sig_name[t]);
-            }
+            state[s] = ns[s];
+            since[s] = now;
         }
     }
-    CHECK(!(state[AS] && state[A]), "sipka A_S iba pri cervenej na A");
-    CHECK(!(state[CS] && state[C]), "sipka C_S iba pri cervenej na C");
 
     if (verbose)
     {
@@ -264,6 +324,53 @@ static void expect_at(uint32_t t, unsigned greens, unsigned yellows, const char 
 }
 
 /* ---------------------------------------------------------------------------
+ * Samotest kontroly ochranneho casu (check_change)
+ * ------------------------------------------------------------------------- */
+
+static int guard_case(int lit_before, uint32_t red_for_ms, int self_red_for_ms)
+{
+    /* B_D bol pred zmenou zlty (lit_before=2) alebo cerveny red_for_ms; v case 10 000 sa zapne A_S */
+    int old[NSIG] = {0};
+    uint32_t old_since[NSIG];
+    int ns[NSIG] = {0};
+    const uint32_t t_now = 10000U;
+
+    for (int s = 0; s < NSIG; s++)
+    {
+        old_since[s] = 0U;
+    }
+    old[BD] = lit_before;
+    old_since[BD] = t_now - red_for_ms;
+    old_since[AS] = t_now - (uint32_t)self_red_for_ms;
+    ns[AS] = 1;
+    return check_change(old, old_since, ns, t_now, false);
+}
+
+static void test_guard_checker(void)
+{
+    printf("Samotest kontroly ochranneho casu voci stavu pred zmenou\n");
+    t0 = now = 0;
+    CHECK(guard_case(2, TRAFFIC_YELLOW_MS, 5000) > 0,
+          "0 ms: B_D zlta zhasne a A_S sa zapne v tej istej ms -> porusenie");
+    CHECK(guard_case(0, 0U, 5000) > 0, "0 ms: B_D cerveny prave teraz -> porusenie");
+    CHECK(guard_case(0, 999U, 5000) > 0, "999 ms po cervenej B_D -> porusenie");
+    CHECK(guard_case(0, 1000U, 5000) == 0, "1000 ms po cervenej B_D -> v poriadku");
+    CHECK(guard_case(0, 1000U, 999) > 0, "A_S sam cerveny iba 999 ms -> porusenie");
+
+    /* sipka hned po zltej na svojom semafore (ten isty pohyb) je povolena */
+    int old[NSIG] = {0}, ns[NSIG] = {0};
+    uint32_t old_since[NSIG] = {0};
+    old[A] = 2;
+    old_since[A] = 8000U;
+    ns[AS] = 1;
+    CHECK(check_change(old, old_since, ns, 10000U, false) == 0, "A zlta -> cervena a A_S v tej istej ms -> v poriadku");
+    /* to iste so sipkou pri svietiacej A */
+    old[A] = 1;
+    ns[A] = 1;
+    CHECK(check_change(old, old_since, ns, 10000U, false) > 0, "A_S pri zelenej A -> porusenie");
+}
+
+/* ---------------------------------------------------------------------------
  * F1 - Obsluha vjazdu C
  * ------------------------------------------------------------------------- */
 
@@ -331,10 +438,32 @@ static void test_f1(void)
     CHECK(status().c_req, "C_REQ=1 (zapisane po skonceni F1)");
     expect_at(25000, F3, 0, "F3 (C_REQ prisiel neskoro na F2)");
     run_to(26000);
-    car = false;                        /* odbocil doprava po sipke */
+    car = false;                        /* odbocil doprava po sipke: obsadeny -> volny pri C_S */
     run(1);
     CHECK(!status().c_req, "C_REQ=0 po odchode pocas sipky");
     expect_at(41000, F3, 0, "dalsi cyklus bez F2");
+
+    printf("F1e2 - auto odide este pred sipkou: pri zapnuti C_S je snimac volny, poziadavka ostava\n");
+    reset(0);
+    run_to(17500);
+    car = true;
+    run_to(22600);
+    CHECK(status().c_req, "C_REQ=1");
+    run_to(23000);
+    car = false;                        /* odislo pri cervenej, pred zapnutim C_S */
+    expect_at(24999, M(BR), 0, "C_S este nesvieti");
+    expect_at(25000, F3, 0, "C_S zapne pri volnom snimaci");
+    run_to(30000);
+    CHECK(status().c_req, "C_REQ=1 aj po celej sipke (snimac nezmenil stav)");
+    expect_at(41000, F2, 0, "F2 po najblizsej F1");
+
+    printf("F1e3 - auto pride az pocas sipky a hned odide: bez poziadavky nic nerusi\n");
+    reset(0);
+    run_to(9500);
+    car = true;
+    run(500);
+    car = false;
+    CHECK(!status().c_req, "C_REQ=0");
 
     printf("F1f - auto ostane stat: F2 pride po najblizsej F1\n");
     reset(0);
@@ -599,6 +728,7 @@ static void test_random(void)
 
 int main(void)
 {
+    test_guard_checker();
     test_f1();
     test_f2();
     test_f3();
