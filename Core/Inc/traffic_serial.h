@@ -67,7 +67,8 @@ typedef enum
     SERIAL_RESULT_ERR_BUSY,
     SERIAL_RESULT_ERR_MODE,
     SERIAL_RESULT_ERR_STATE,
-    SERIAL_RESULT_ERR_CONFLICT
+    SERIAL_RESULT_ERR_CONFLICT,
+    SERIAL_RESULT_ERR_SYNTAX            /* automat odmietol parameter (parser ho bezne zachyti skor) */
 } SerialResult;
 
 /* Udaje pre vypis STATUS (vyplni automat) */

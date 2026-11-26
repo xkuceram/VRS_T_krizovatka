@@ -58,6 +58,7 @@ const char *TrafficSerial_ResultText(SerialResult result)
         case SERIAL_RESULT_ERR_MODE:     return "ERR MODE";
         case SERIAL_RESULT_ERR_STATE:    return "ERR STATE";
         case SERIAL_RESULT_ERR_CONFLICT: return "ERR CONFLICT";
+        case SERIAL_RESULT_ERR_SYNTAX:   return "ERR SYNTAX";
         default:                         return "ERR BUSY";
     }
 }

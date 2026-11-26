@@ -224,6 +224,7 @@ static void test_results(void)
     fake_result = SERIAL_RESULT_ERR_STATE;    expect("SET A_S YELLOW\n", "ERR STATE\r\n");
     fake_result = SERIAL_RESULT_ERR_CONFLICT; expect("SET B_D GREEN\n", "ERR CONFLICT\r\n");
     fake_result = SERIAL_RESULT_ERR_BUSY;     expect("MODE DEMO\n", "ERR BUSY\r\n");
+    fake_result = SERIAL_RESULT_ERR_SYNTAX;   expect("SET C GREEN\n", "ERR SYNTAX\r\n");
 }
 
 static void test_syntax(void)
