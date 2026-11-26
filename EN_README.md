@@ -121,7 +121,7 @@ flowchart TD
 
 The computer connects through the ST-LINK virtual COM port. We will set USART2 and the terminal to **9600 baud**, 8 data bits, no parity, 1 stop bit and flow control disabled. The board connects PA2 to ST-LINK for TX and PA15 for RX. <sub>· usart-control</sub> [STMicroelectronics UM1956, Section 7.9](https://www.st.com/resource/en/user_manual/um1956-stm32-nucleo32-boards-mb1180-stmicroelectronics.pdf)
 
-Commands use uppercase ASCII text with a single space between fields. The `<target>` parameter is `A`, `A_S`, `B_R`, `B_D`, `C`, `C_S` or `P`. Target `B` selects both signals on the right-hand approach. An incoming command has at most 32 characters before `LF` or `CRLF`. The device skips empty lines and sends one `CRLF`-terminated reply for each non-empty line. The terminal sends the next command after receiving the reply. <sub>· usart-control</sub>
+Commands use uppercase ASCII text with a single space between fields. The `<target>` parameter is `A`, `A_S`, `B_R`, `B_D`, `C`, `C_S` or `P`. Target `B` selects both signals on the right-hand approach. An incoming command has at most 32 characters before `LF`, `CRLF` or a single `CR`, which some terminals send when Enter is pressed. The device skips empty lines and sends one `CRLF`-terminated reply for each non-empty line. The terminal sends the next command after receiving the reply. <sub>· usart-control</sub>
 
 <sub>traffic-fsm · usart-control</sub>
 

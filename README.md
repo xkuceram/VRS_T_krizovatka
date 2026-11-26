@@ -121,7 +121,7 @@ flowchart TD
 
 Počítač sa pripojí cez virtuálny sériový port ST-LINK. Pre USART2 aj terminál nastavíme **9600 baudov**, 8 dátových bitov, žiadnu paritu, 1 stop bit a vypnuté riadenie toku. ST-LINK na doske používa PA2 pre TX a PA15 pre RX. <sub>· usart-control</sub> [STMicroelectronics UM1956, sekcia 7.9](https://www.st.com/resource/en/user_manual/um1956-stm32-nucleo32-boards-mb1180-stmicroelectronics.pdf)
 
-Protokol navrhujeme s textovými príkazmi v ASCII a veľkými písmenami. Jedna medzera oddeľuje susedné položky. Parameter `<cieľ>` je `A`, `A_S`, `B_R`, `B_D`, `C`, `C_S` alebo `P`. Cieľ `B` zahŕňa oba semafory na vjazde sprava. Prijatý príkaz má najviac 32 znakov pred `LF` alebo `CRLF`. Prázdne riadky sa preskočia. Na každý neprázdny riadok zariadenie odpovie jedným riadkom s koncom `CRLF`. Terminál odošle ďalší príkaz po prijatí odpovede. <sub>· usart-control</sub>
+Protokol navrhujeme s textovými príkazmi v ASCII a veľkými písmenami. Jedna medzera oddeľuje susedné položky. Parameter `<cieľ>` je `A`, `A_S`, `B_R`, `B_D`, `C`, `C_S` alebo `P`. Cieľ `B` zahŕňa oba semafory na vjazde sprava. Prijatý príkaz má najviac 32 znakov pred `LF`, `CRLF` alebo samotným `CR`, ktorý niektoré terminály posielajú pri stlačení Enter. Prázdne riadky sa preskočia. Na každý neprázdny riadok zariadenie odpovie jedným riadkom s koncom `CRLF`. Terminál odošle ďalší príkaz po prijatí odpovede. <sub>· usart-control</sub>
 
 <sub>traffic-fsm · usart-control</sub>
 
