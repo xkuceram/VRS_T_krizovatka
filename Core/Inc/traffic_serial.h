@@ -28,7 +28,7 @@
 #include <stdint.h>
 
 #define TRAFFIC_SERIAL_LINE_MAX   32U   /* max. dlzka prikazu bez LF / CRLF */
-#define TRAFFIC_SERIAL_REPLY_MAX  128U  /* odpoved STATUS ma ~100 znakov + CRLF */
+#define TRAFFIC_SERIAL_REPLY_MAX  128U  /* min. velkost buffera na odpoved (STATUS ma ~100 znakov + CRLF) */
 
 /* Rezim */
 typedef enum
@@ -112,6 +112,10 @@ void TrafficSerial_Init(const TrafficSerialHandlers *handlers);
 /*
  * Spracuje jeden prijaty znak. Ak tym skoncil neprazdny riadok, zapise do
  * reply odpoved ukoncenu CRLF a vrati jej dlzku. Inak vrati 0.
+ *
+ * reply musi mat aspon TRAFFIC_SERIAL_REPLY_MAX bajtov. Pri mensom buffri sa
+ * riadok zahodi bez volania automatu a funkcia vrati 0 (ziadna skratena odpoved).
+ * Riadok s nulovym bajtom 0x00 sa nevykona a dostane ERR SYNTAX.
  */
 size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size);
 

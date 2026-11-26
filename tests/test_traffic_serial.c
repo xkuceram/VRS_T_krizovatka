@@ -75,14 +75,15 @@ static void reset_fake(void)
 static char replies[1024];
 static int reply_count;
 
-static void send(const char *text)
+/* posle presne len bajtov (aj nulovy bajt 0x00, na ktorom by sa C retazec skoncil) */
+static void send_bytes(const char *data, size_t len)
 {
     replies[0] = '\0';
     reply_count = 0;
-    for (const char *p = text; *p != '\0'; p++)
+    for (size_t i = 0; i < len; i++)
     {
         char reply[TRAFFIC_SERIAL_REPLY_MAX];
-        size_t n = TrafficSerial_PutChar(*p, reply, sizeof reply);
+        size_t n = TrafficSerial_PutChar(data[i], reply, sizeof reply);
         if (n > 0U)
         {
             CHECK(n == strlen(reply), "dlzka odpovede %u nesedi s textom", (unsigned)n);
@@ -93,14 +94,25 @@ static void send(const char *text)
     }
 }
 
+static void send(const char *text)
+{
+    send_bytes(text, strlen(text));
+}
+
+static void print_escaped_n(const char *s, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+    {
+        if (s[i] == '\r')      printf("\\r");
+        else if (s[i] == '\n') printf("\\n");
+        else if (s[i] == '\0') printf("\\0");
+        else                   putchar(s[i]);
+    }
+}
+
 static void print_escaped(const char *s)
 {
-    for (; *s != '\0'; s++)
-    {
-        if (*s == '\r')      printf("\\r");
-        else if (*s == '\n') printf("\\n");
-        else                 putchar(*s);
-    }
+    print_escaped_n(s, strlen(s));
 }
 
 /* posle text a overi, ze prisli presne ocakavane odpovede (spojene za sebou) */
@@ -109,6 +121,18 @@ static void expect(const char *text, const char *expected)
     send(text);
     printf("  ");
     print_escaped(text);
+    printf("  ->  ");
+    print_escaped(replies[0] ? replies : "(bez odpovede)");
+    printf("\n");
+    CHECK(strcmp(replies, expected) == 0, "ocakavane \"%s\"", expected);
+}
+
+/* to iste ako expect, ale s explicitnou dlzkou vstupu */
+static void expect_bytes(const char *data, size_t len, const char *expected)
+{
+    send_bytes(data, len);
+    printf("  ");
+    print_escaped_n(data, len);
     printf("  ->  ");
     print_escaped(replies[0] ? replies : "(bez odpovede)");
     printf("\n");
@@ -258,6 +282,27 @@ static void test_skuska_u2(void)
     expect("STATUS\r\n", "OK MODE=CONTROL NEXT=- READY=1 A=RED A_S=OFF B_R=RED B_D=RED C=RED C_S=OFF P=RED CAR_C=0 P_REQ=0\r\n");
 }
 
+static void test_nul_byte(void)
+{
+    static const char set_nul[]    = "SET A GREEN\0X\n";   /* pred 0x00 je platny prikaz */
+    static const char status_nul[] = "STATUS\0\r\n";
+    static const char only_nul[]   = "\0\n";
+    static const char mode_nul[]   = "MODE\0DEMO\n";
+
+    printf("\nNulovy bajt 0x00 v riadku -> ERR SYNTAX, automat sa nevola\n");
+    reset_fake();
+    expect_bytes(set_nul, sizeof set_nul - 1U, "ERR SYNTAX\r\n");
+    expect_bytes(status_nul, sizeof status_nul - 1U, "ERR SYNTAX\r\n");
+    expect_bytes(only_nul, sizeof only_nul - 1U, "ERR SYNTAX\r\n");
+    expect_bytes(mode_nul, sizeof mode_nul - 1U, "ERR SYNTAX\r\n");
+    CHECK(calls_mode == 0 && calls_signal == 0 && calls_status == 0,
+          "riadok s nulovym bajtom sa nema odovzdat automatu");
+
+    /* dalsi riadok sa uz spracuje normalne */
+    expect("SET A GREEN\n", "OK\r\n");
+    CHECK(calls_signal == 1, "po riadku s 0x00 sa ma dalsi platny prikaz vykonat");
+}
+
 static void test_no_handlers(void)
 {
     printf("\nBez zaregistrovaneho automatu (NULL)\n");
@@ -268,17 +313,34 @@ static void test_no_handlers(void)
     TrafficSerial_Init(&fake_handlers);
 }
 
+/* posle text s buffrom zadanej velkosti, vrati sucet dlzok odpovedi */
+static size_t send_with_buffer(const char *text, char *reply, size_t reply_size)
+{
+    size_t n = 0;
+    for (const char *p = text; *p != '\0'; p++)
+    {
+        n += TrafficSerial_PutChar(*p, reply, reply_size);
+    }
+    return n;
+}
+
 static void test_small_buffer(void)
 {
-    char reply[2];
-    printf("\nPrilis maly buffer na odpoved\n");
+    char reply[TRAFFIC_SERIAL_REPLY_MAX];
+
+    printf("\nBuffer mensi ako TRAFFIC_SERIAL_REPLY_MAX -> bez odpovede a bez volania automatu\n");
+    reset_fake();
     TrafficSerial_Init(&fake_handlers);
-    size_t n = 0;
-    for (const char *p = "STATUS\n"; *p != '\0'; p++)
-    {
-        n += TrafficSerial_PutChar(*p, reply, sizeof reply);
-    }
-    CHECK(n == 0, "pri buffri mensom ako 3 bajty sa nema nic zapisat");
+
+    CHECK(send_with_buffer("SET A GREEN\n", reply, sizeof reply - 1U) == 0, "pri mensom buffri sa nema nic zapisat");
+    CHECK(send_with_buffer("STATUS\n", reply, 2U) == 0, "pri buffri 2 B sa nema nic zapisat");
+    CHECK(send_with_buffer("MODE DEMO\n", NULL, 0U) == 0, "pri NULL buffri sa nema nic zapisat");
+    CHECK(calls_mode == 0 && calls_signal == 0 && calls_status == 0,
+          "pri malom buffri sa automat nema volat");
+
+    /* s buffrom presne TRAFFIC_SERIAL_REPLY_MAX sa odpovie normalne */
+    CHECK(send_with_buffer("SET A GREEN\n", reply, sizeof reply) == 4U && strcmp(reply, "OK\r\n") == 0,
+          "pri buffri TRAFFIC_SERIAL_REPLY_MAX ma prist OK");
     printf("  ok\n");
     TrafficSerial_Init(&fake_handlers);
 }
@@ -295,6 +357,7 @@ int main(void)
     test_syntax();
     test_length();
     test_skuska_u2();
+    test_nul_byte();
     test_no_handlers();
     test_small_buffer();
 

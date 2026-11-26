@@ -10,6 +10,7 @@ static const TrafficSerialHandlers *serial_handlers = NULL;
 static char rx_line[TRAFFIC_SERIAL_LINE_MAX + 1U];
 static size_t rx_len = 0;
 static uint8_t rx_overflow = 0;   /* riadok prekrocil 32 znakov, zvysok sa zahadzuje */
+static uint8_t rx_invalid = 0;    /* v riadku bol nulovy bajt 0x00 -> ERR SYNTAX */
 static uint8_t last_was_cr = 0;   /* CR uz ukoncil riadok, nasledujuci LF patri k nemu */
 
 /* ---------------------------------------------------------------------------
@@ -267,6 +268,7 @@ void TrafficSerial_Init(const TrafficSerialHandlers *handlers)
     serial_handlers = handlers;
     rx_len = 0;
     rx_overflow = 0;
+    rx_invalid = 0;
     last_was_cr = 0;
 }
 
@@ -274,7 +276,7 @@ size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size)
 {
     TextOut o = {reply, reply_size, 0};
 
-    if (reply_size > 0U)
+    if (reply != NULL && reply_size > 0U)
     {
         reply[0] = '\0';
     }
@@ -289,6 +291,10 @@ size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size)
 
     if (c != '\r' && c != '\n')
     {
+        if (c == '\0')
+        {
+            rx_invalid = 1;             /* C retazec by sa tu skoncil, riadok sa nevykona */
+        }
         if (rx_len < TRAFFIC_SERIAL_LINE_MAX)
         {
             rx_line[rx_len++] = c;
@@ -301,10 +307,11 @@ size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size)
     }
 
     /* koniec riadka */
-    if (reply_size < 3U)
+    if (reply == NULL || reply_size < TRAFFIC_SERIAL_REPLY_MAX)
     {
-        rx_len = 0;                     /* odpoved sa nevojde ani s CRLF, riadok sa zahodi */
-        rx_overflow = 0;
+        rx_len = 0;                     /* buffer je mensi ako minimum: riadok sa zahodi */
+        rx_overflow = 0;                /* skor, nez by sa zavolal automat */
+        rx_invalid = 0;
         return 0;
     }
     if (rx_overflow)
@@ -315,6 +322,10 @@ size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size)
     {
         return 0;                       /* prazdny riadok sa preskoci */
     }
+    else if (rx_invalid)
+    {
+        out_str(&o, "ERR SYNTAX");      /* nulovy bajt v riadku, automat sa nevola */
+    }
     else
     {
         rx_line[rx_len] = '\0';
@@ -324,6 +335,7 @@ size_t TrafficSerial_PutChar(char c, char *reply, size_t reply_size)
     }
     rx_len = 0;
     rx_overflow = 0;
+    rx_invalid = 0;
 
     out_str(&o, "\r\n");
     return o.len;
