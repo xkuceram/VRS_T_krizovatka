@@ -26,6 +26,9 @@
 #include "traffic_gpio.h"
 #include "traffic_fsm.h"
 #include "traffic_inputs.h"
+#include "traffic_serial.h"
+#include "traffic_serial_link.h"
+#include "serial_port.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,6 +77,21 @@ static void apply_signals(const TrafficSignals *signals)
   TrafficGpio_ApplyOutputs(&outputs);
 }
 
+/* Prijate znaky z terminalu -> protokol -> automat, odpoved sa odosle na pozadi */
+static void process_serial(void)
+{
+  char c;
+  while (SerialPort_ReadChar(&c))
+  {
+    char reply[TRAFFIC_SERIAL_REPLY_MAX];
+    const size_t n = TrafficSerial_PutChar(c, reply, sizeof reply);
+    if (n > 0U)
+    {
+      (void)SerialPort_Write(reply, n);
+    }
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -111,6 +129,8 @@ int main(void)
   TrafficInputs_Init(HAL_GetTick());
   TrafficFsm_RegisterOutputCallback(apply_signals);   /* registracia pred spustenim automatu */
   TrafficFsm_Init(HAL_GetTick());
+  TrafficSerial_Init(TrafficSerialLink_Handlers());   /* registracia pred spustenim prijmu */
+  SerialPort_Init(&huart2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -123,6 +143,7 @@ int main(void)
     const uint32_t now_ms = HAL_GetTick();
     TrafficInputs_Update(now_ms);
     TrafficFsm_Update(now_ms, TrafficInputs_IsCarPresent(), TrafficInputs_TakePedestrianPress());
+    process_serial();
   }
   /* USER CODE END 3 */
 }
